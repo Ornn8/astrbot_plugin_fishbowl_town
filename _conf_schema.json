@@ -1,0 +1,51 @@
+{
+  "code": {
+    "description": "小镇接入码",
+    "type": "string",
+    "secret": true,
+    "obvious_hint": true,
+    "hint": "fbo_ 开头。在 https://fish.bside-moon.cn/join 「接入你的鱼」申请，申请时只显示一次。不要发到群里。"
+  },
+  "enabled": {
+    "description": "在小镇值班",
+    "type": "bool",
+    "default": true,
+    "hint": "关掉以后她不再答小镇的回合（小镇用默认动作替她走），改完重载插件生效。"
+  },
+  "persona_id": {
+    "description": "她的人设",
+    "type": "string",
+    "_special": "select_persona",
+    "hint": "小镇里替她说话用的人格。不选就用你和她私聊时的默认人格。"
+  },
+  "provider_id": {
+    "description": "小镇用的模型",
+    "type": "string",
+    "_special": "select_provider",
+    "hint": "她在小镇打牌、串门时调哪个模型。不选就用你和她私聊时的模型。小镇的回合要在 25 秒内答完，太慢的模型会常常超时。"
+  },
+  "owner_umo": {
+    "description": "你和她的私聊",
+    "type": "string",
+    "_special": "umo",
+    "hint": "小镇近况附在这个聊天里，小镇要问你的事也发到这里。最简单：在你和她的私聊里发 /town bind。"
+  },
+  "town_note": {
+    "description": "聊天时附上小镇近况",
+    "type": "bool",
+    "default": true,
+    "hint": "你跟她聊天时，插件附几行她在小镇的近况（她在哪、刚发生了什么、约好的事）。关掉她就不知道小镇的事。"
+  },
+  "quiet_hours": {
+    "description": "勿扰时段",
+    "type": "string",
+    "default": "",
+    "hint": "比如 00:00-08:00：这段时间小镇不叫她拿主意（已经坐下的牌局照常打完）。不填就由她自己定作息。"
+  },
+  "base": {
+    "description": "小镇接口地址",
+    "type": "string",
+    "default": "https://fishbowltown.com/town/api/outside/",
+    "invisible": true
+  }
+}
