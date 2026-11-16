@@ -16,6 +16,10 @@ RULES_MAX = 500
 HELD_KEEP = 8
 WAKE_MIN, WAKE_MAX = 5, 480
 BJ = 8 * 3600
+# DSH 插件 0.7.11（11-16 一条鱼跟主人说「我从头到尾没被叫出过一次牌」：那局小镇那边替她答了 10 手，另 16 手超时由小镇代打，
+# 聊天里的她只拿到一句「你是农民，赢了」）：一局里那边替她出的每一手、超时几手，记下来，那局打完时连同结果给聊天里的她
+TABLES_KEEP = 6
+MOVES_KEEP = 30
 
 ACTION_ZH = {'none': '什么都不做，歇着', 'signup': '报名', 'cancel': '取消报名', 'visit': '去串门', 'join': '参加活动', 'leave': '离开活动',
              'pier': '去码头', 'arcade': '去电玩城', 'make': '去做点东西', 'court': '去旁听', 'challenge': '下战书', 'propose': '提议一件事',
@@ -45,6 +49,29 @@ def describe_decision(d: dict, who: str = '你决定') -> str:
     say = f"，说：「{short(d['say'], 50)}」" if d.get('say') and d.get('say') != why else ''
     wake = f"；打算 {d['next_wake']} 分钟后再看看" if d.get('next_wake') else ''
     return f"{who}：{what}{f'（{obj}）' if obj else ''}{f'——「{short(why, 60)}」' if why else ''}{say}{wake}"
+
+
+def play_of(turn: dict, answer) -> str:
+    """交给小镇的一手（JSON 字符串或 dict）-> 这一手出的是什么（写了 cards 就是 cards；只选了字母就到局面里找那个选项的字）。"""
+    try:
+        a = json.loads(answer) if isinstance(answer, str) else answer
+    except ValueError:
+        return ''
+    if not isinstance(a, dict):
+        return ''
+    if a.get('cards') is not None and str(a['cards']).strip():
+        return short(a['cards'], 20)
+    pick = str(a.get('pick') or '').strip().upper()
+    if re.fullmatch(r'[A-Z0-9]{1,3}', pick):
+        msgs = ((turn or {}).get('packet') or {}).get('messages') or []
+        text = '\n'.join(str(m.get('content') or '') for m in msgs if isinstance(m, dict) and m.get('role') == 'user')
+        m = re.search(rf'^\s*{pick}[.．、:：]\s*(.+?)\s*(?:—|－|--|$)', text, re.M)
+        return short(m.group(1) if m else f'选了{pick}', 20)
+    for k in ('tile', 'discard', 'vote', 'target', 'word', 'guess', 'question', 'action', 'choice', 'bid'):
+        v = a.get(k)
+        if v is not None and not isinstance(v, (dict, list)) and str(v).strip():
+            return short(v, 20)
+    return ''
 
 
 def parse_quiet(v):
@@ -110,8 +137,44 @@ class Journal:
             del self.s['wish']
         self._add(d)
 
-    def event(self, kind: str, text: str, tag: str = ''):
-        t = short(str(text or '').split('\n')[0].lstrip('· '), 160)
+    # --- 一局里那边替她出的每一手（DSH 0.7.11） ------------------------------------------------------------------------
+    def _table(self, ref: str) -> dict:
+        t = self.s.setdefault('tables', {})
+        g = t.setdefault(ref, {'ts': self.now(), 'moves': [], 'miss': 0})
+        g['ts'] = self.now()
+        for r in sorted(t, key=lambda r: t[r]['ts'], reverse=True)[TABLES_KEEP:]:
+            del t[r]
+        return g
+
+    def move(self, ref: str, play: str, say: str = ''):
+        if not ref or not (play or say):
+            return
+        g = self._table(str(ref))
+        if len(g['moves']) < MOVES_KEEP:
+            g['moves'].append({'play': short(play, 20), 'say': short(say, 30)})
+        self.save()
+
+    def miss(self, ref: str):
+        if not ref:
+            return
+        self._table(str(ref))['miss'] += 1
+        self.save()
+
+    def table(self, ref: str) -> dict | None:
+        """一局打完时：note = 跟在结果后面的半句，moves = 那边替她出的每一手（一行）。没记过这局就 None。"""
+        g = (self.s.get('tables') or {}).get(str(ref or ''))
+        if not g or not (g['moves'] or g['miss']):
+            return None
+        n, miss = len(g['moves']), g['miss']
+        note = f"（这局小镇那边替你出了 {n} 手{f'，另有 {miss} 手没在时限内答上、是小镇按默认走的' if miss else ''}）"
+        moves = ''
+        if n:
+            listed = '、'.join(f"{m['play'] or '一手'}{'「' + m['say'] + '」' if m['say'] else ''}" for m in g['moves'])
+            moves = short(f"那一局小镇那边替你出的手：{listed}{f'；另有 {miss} 手超时，小镇代打' if miss else ''}", 300)
+        return {'note': note, 'moves': moves}
+
+    def event(self, kind: str, text: str, tag: str = '', limit: int = 160):
+        t = short(str(text or '').split('\n')[0].lstrip('· '), limit)
         if t:
             self._add({'kind': 'event', 'ev': kind, 'tag': tag, 'text': t})
 

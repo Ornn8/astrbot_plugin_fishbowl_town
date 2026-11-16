@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 
 from . import events as ev
+from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
 
@@ -115,6 +117,12 @@ class Runner:
             await self._post(tid, answer, turn, received)
             if decided:
                 j.decision(decided)
+            if kind == 'game':   # 牌桌上这一手记进本子，那局打完时连同结果给聊天里的她
+                try:
+                    a = json.loads(answer)
+                    j.move((turn.get('packet') or {}).get('ref'), play_of(turn, a), a.get('say') if isinstance(a.get('say'), str) else '')
+                except (ValueError, AttributeError):
+                    pass
             self.stats['answered'] += 1
             self.stats['last_turn_at'] = self.now()
         except asyncio.TimeoutError:
@@ -221,10 +229,19 @@ class Runner:
         for it in items:
             self.stats['events'] += 1
             kind = str(it.get('kind') or '')
+            d = it.get('data') if isinstance(it.get('data'), dict) else None
+            # 超时代打的一手记到那局上；一局打完，结果后面带上那边替她出了几手、超时几手，本子里另记一行每一手
+            if kind == 'outside_turn' and d and d.get('what') == 'timeout' and d.get('ref'):
+                j.miss(d['ref'])
+            table = j.table(d.get('game_id') or d.get('ref')) if kind == 'digest' and d else None
+            if table:
+                it = {**it, 'data': {**d, 'facts': re.sub(r'[。.]\s*$', '', str(d.get('facts') or d.get('summary') or '')) + table['note']}}
             line = ev.describe(it)
             if line and kind not in ev.QUIET:
                 tag = ev.FRESH_TAG.get(kind, '')
                 j.event(kind, ev.no_money(line) if tag else line, tag)
+            if table and table['moves']:
+                j.event('table', table['moves'], '', 300)
             if kind in ('heart_consent', 'heart_together'):
                 j.heart(it.get('data') or {}, 'together' if kind == 'heart_together' else 'consent')
             if kind in ev.NEEDS_HER and line:

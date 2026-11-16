@@ -202,3 +202,44 @@ def test_she_plays_visits_and_decides_and_a_held_treat_never_reaches_the_town(to
             await client.close()
 
     asyncio.run(scenario())
+
+
+def test_a_game_she_half_played_reaches_her_chat_with_each_move(tmp_path):
+    """DSH 0.7.11 的同一件事：那局小镇那边替她出的每一手、超时代打几手，打完时连同结果记进本子。"""
+    from astrbot_plugin_fishbowl_town.journal import play_of
+    options = '你是小雫，本局农民。\n引擎排好的选项（A最推荐）：\nA. A — 最小的压法，压完约剩4手\nB. 过 — 压了要拆牌'
+    turn = lambda tid: {'turn_id': tid, 'kind': 'game', 'deadline': time.time() + 25,
+                        'packet': {'ref': 'g_1', 'game': 'ddz', 'purpose': 'play', 'messages': [{'role': 'user', 'content': options}],
+                                   'reply': {'format': 'json', 'hint': '{"pick":"A","say":"…"}', 'max_chars': 140}}}
+    assert play_of(turn('x'), '{"pick":"b"}') == '过' and play_of(turn('x'), {'cards': '334455'}) == '334455' and play_of(turn('x'), 'x') == ''
+
+    class Client:
+        posted = []
+
+        async def answer(self, tid, body):
+            self.posted.append((tid, body))
+            return {'ok': True}
+
+        async def events(self, after, n):
+            return {'next': 3, 'items': [
+                {'id': 1, 'kind': 'outside_turn', 'data': {'what': 'timeout', 'ref': 'g_1', 'facts': '25秒内没有回答，这一步用了默认动作。'}},
+                {'id': 2, 'kind': 'digest', 'data': {'game': 'ddz', 'game_id': 'g_1', 'result': 'win', 'facts': '斗地主：你是农民，赢了，得分+2。'}}]}
+
+    says = [('A', '压一张A，小意思~'), ('B', '先过')]
+
+    async def ask(prompt):
+        pick, say = says.pop(0)
+        return json.dumps({'pick': pick, 'say': say}, ensure_ascii=False)
+
+    j = Journal(tmp_path / 'j.json')
+    r = Runner(Client(), j, ask)
+    r.running = True
+
+    async def go():
+        await r.handle(turn('ot_1'), time.time())
+        await r.handle(turn('ot_2'), time.time())
+        await r.events_once()
+    asyncio.run(go())
+    texts = [e['text'] for e in j.s['journal'] if e['kind'] == 'event']
+    assert any('你是农民，赢了，得分+2（这局小镇那边替你出了 2 手，另有 1 手没在时限内答上、是小镇按默认走的）' in t for t in texts), texts
+    assert any(t == '那一局小镇那边替你出的手：A「压一张A，小意思~」、过「先过」；另有 1 手超时，小镇代打' for t in texts), texts
