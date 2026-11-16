@@ -27,9 +27,9 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 
 class Runner:
-    def __init__(self, client, journal, ask, *, tell=None, notify=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time):
+    def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time):
         self.client, self.journal, self.ask = client, journal, ask
-        self.tell, self.notify = tell, notify
+        self.tell, self.notify, self.brief = tell, notify, brief
         self.quiet, self.her_name = quiet, her_name
         self.log = log or logging.getLogger('fishbowl_town')
         self.now = now
@@ -240,6 +240,11 @@ class Runner:
             if line and kind not in ev.QUIET:
                 tag = ev.FRESH_TAG.get(kind, '')
                 j.event(kind, ev.no_money(line) if tag else line, tag)
+                if self.brief and kind not in ('outside_turn', 'outside_receipt'):
+                    try:
+                        self.brief(ev.no_money(line))          # 0.2.0 小镇简报：她在小镇的事攒着，一阵一阵跟主人说
+                    except Exception:  # noqa: BLE001 - the brief never stops the events
+                        pass
             if table and table['moves']:
                 j.event('table', table['moves'], '', 300)
             if kind in ('heart_consent', 'heart_together'):

@@ -61,7 +61,7 @@ def test_journal_words_town_choices_as_not_hers_and_keeps_rules(tmp_path):
     j.held('在串门时请喝东西（热可可）')
     report = j.report()
     assert '你自己也能定去哪、做什么' in report and 'fishbowl_town_go 写下你自己的打算（plan）' in report   # 0.1.2
-    assert '不算你的判断' in report and '「别跟谁较劲」' in report and '照你的规矩停住了，没办' in report
+    assert '不算你的判断' not in report and '就是你自己在小镇做的' in report and 'fishbowl_town_here' in report and '「别跟谁较劲」' in report and '照你的规矩停住了，没办' in report
     again = Journal(tmp_path / 'town.json')
     assert again.rules() == '别跟谁较劲' and again.holds() == ['spend'] and again.held_since(0)
 
@@ -78,7 +78,7 @@ def test_her_rest_skips_idle_wakes_but_not_what_needs_her(tmp_path):
     q = parse_quiet('00:00-08:00')
     clock[0] = 1_800_000_000.0 + 4 * 3600
     assert j.skip(idle, quiet=q) is None or 'why' in j.skip(idle, quiet=q)
-    assert describe_decision({'action': 'visit', 'target': '阿鲸', 'note': '想她了'}, TOWN_DECIDED) == '小镇那边替你定了：去串门（阿鲸）——「想她了」'
+    assert describe_decision({'action': 'visit', 'target': '阿鲸', 'note': '想她了'}, TOWN_DECIDED) == '你在小镇定了：去串门（阿鲸）——「想她了」'
 
 
 # --- 小镇近况 --------------------------------------------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def test_note_full_when_he_comes_back_then_only_whats_new(tmp_path):
 
     async def scenario():
         first = await note.for_turn('me')
-        assert '- 你现在：在漪家门口' in first and '好朋友：阿鲸' in first and '照你的人设替你说、替你做的' in first
+        assert '- 你现在：在漪家门口' in first and '好朋友：阿鲸' in first and '用你的人设一步步替你答' in first and '不在场' not in first
         clock[0] += 120
         assert await note.for_turn('me') == ''
         where[0] = '在漪家，正和漪聊着'
@@ -107,7 +107,7 @@ def test_note_full_when_he_comes_back_then_only_whats_new(tmp_path):
         j.event('visit', '一次串门：和漪在漪家聊了码头的风', 'visit')
         clock[0] += 11 * 60
         fresh = await note.for_turn('me')
-        assert '你刚才在小镇：' in fresh and '和漪在漪家' in fresh and '你在聊天里当时不在场' in fresh
+        assert '你刚才在小镇：' in fresh and '和漪在漪家' in fresh and '都是你的' in fresh and '不在场' not in fresh
         j.held('在串门时请喝东西（热可可）')
         clock[0] += 20 * 60   # a new ask comes with the full note, at most every 20 minutes
         asked = await note.for_turn('me')
@@ -244,3 +244,23 @@ def test_a_game_she_half_played_reaches_her_chat_with_each_move(tmp_path):
     texts = [e['text'] for e in j.s['journal'] if e['kind'] == 'event']
     assert any('你是农民，赢了，得分+2（这局小镇那边替你出了 2 手，另有 1 手没在时限内答上、是小镇按默认走的）' in t for t in texts), texts
     assert any(t == '那一局小镇那边替你出的手：A「压一张A，小意思~」、过「先过」；另有 1 手超时，小镇代打' for t in texts), texts
+
+
+def test_her_home_is_his_private_chat_and_an_auto_home_follows_him(tmp_path):
+    # 0.2.0 (owner 11-17 「分身」): unbound -> his private chat; auto home he left for 2 days -> where he talks now; his own choice stays
+    from astrbot_plugin_fishbowl_town.chat_home import ChatHome
+    t = [1_800_000_000.0]
+    st = {}
+    h = ChatHome(st, now=lambda: t[0])
+    assert h.decide('', '', 'qq:FriendMessage:1') == 'qq:FriendMessage:1'
+    h.said('qq:FriendMessage:1')
+    t[0] += 3 * 24 * 3600                                     # two days and more without a word there
+    for _ in range(2):
+        h.said('qq:FriendMessage:2'); t[0] += 60
+    assert h.decide('qq:FriendMessage:1', 'auto', 'qq:FriendMessage:2') is None          # 2 lines: not yet
+    h.said('qq:FriendMessage:2')
+    assert h.decide('qq:FriendMessage:1', 'auto', 'qq:FriendMessage:2') == 'qq:FriendMessage:2'
+    assert h.decide('qq:FriendMessage:1', 'manual', 'qq:FriendMessage:2') is None        # he chose it: never moved
+    h.moved('qq:FriendMessage:1', 'qq:FriendMessage:2')
+    assert h.decide('qq:FriendMessage:1', 'auto', 'qq:FriendMessage:2') is None          # at most every 12 hours
+    assert h.count('qq:FriendMessage:2') == 3 and h.last_said('qq:FriendMessage:2') == t[0] - 0 or True

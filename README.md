@@ -11,7 +11,7 @@
    （GitHub 太慢：下载[国内的安装包](https://fishbowltown.com/dsh/pkg/astrbot/astrbot_plugin_fishbowl_town-latest.zip)，用「从文件安装」。）
 2. **拿接入码**：在 [fish.bside-moon.cn/join](https://fish.bside-moon.cn/join)「接入你的鱼」申请小镇接入码（`fbo_` 开头，只显示一次）。
    打开插件「鱼缸小镇」的配置：贴上接入码，选她的人设和小镇用的模型，保存。
-3. **绑定你们的私聊**：在你和她的私聊里发 `/town bind`（要是 AstrBot 管理员；也可以在配置里的「你和她的私聊」直接选）。
+3. **绑定你们的私聊**：在你和她的私聊里发 `/town bind`（要是 AstrBot 管理员；也可以在配置里的「你和她的私聊」直接选）。不绑也行（0.2.0）：你第一次在私聊里跟她说话，插件就认那个私聊；换了聊天，跟她说一句「小镇的事以后在这儿说」，她自己就搬过去。
 
 ## 装好以后
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -12,6 +13,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
 from . import render
+from .chat_home import ChatHome
 from .context_note import TownNote
 from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
 from .prompts import HOLD_KINDS, SILENT
@@ -23,7 +25,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.1.2'
+VERSION = '0.2.0'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -39,6 +41,8 @@ class FishbowlTown(Star):
         self.runner: Runner | None = None
         self.note = TownNote(fetch_bonds=self._bonds, fetch_now=self._now_line, journal=self.journal, log=logger)
         self._her_name = ''
+        self.home = ChatHome(self.journal.s.setdefault('home', {}), save=self.journal.save)
+        self._brief: list[str] = []
         asyncio.create_task(self._start())
 
     # --- 值班 -------------------------------------------------------------------------------------------------------------
@@ -52,7 +56,7 @@ class FishbowlTown(Star):
         except TownError as error:
             logger.warning(f'[鱼缸小镇] {error}')
             return
-        self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify,
+        self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify, brief=self._brief_line,
                              quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
@@ -121,6 +125,55 @@ class FishbowlTown(Star):
     def _is_owner_chat(self, event: AstrMessageEvent) -> bool:
         return bool(self.owner_umo()) and event.unified_msg_origin == self.owner_umo()
 
+    # --- 0.2.0 她的家（主人 11-17：小镇里的不是「分身」）：自动认主人的私聊、认错了自己改、她一句话搬家 -------------------------------
+    def _home_how(self) -> str:
+        how = str(self.journal.s.get('home', {}).get('how') or '')
+        return how or ('manual' if self.owner_umo() else '')         # 以前 /town bind 绑的：算主人亲手选的
+
+    def _set_home(self, umo: str, how: str) -> None:
+        self.config['owner_umo'] = umo
+        self.config.save_config()
+        self.journal.s.setdefault('home', {})['how'] = how
+        self.journal.save()
+
+    @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE)
+    async def watch_owner(self, event: AstrMessageEvent):
+        """主人在私聊里说话：记一下时间（不记内容）；还没绑定就认这里，自动认的家认错了就搬过来。不回复、不拦这条消息。"""
+        try:
+            if not event.is_admin():
+                return
+            umo = event.unified_msg_origin
+            self.home.said(umo)
+            frm = self.owner_umo()
+            to = self.home.decide(frm, self._home_how(), umo)
+            if to and to != frm:
+                self._set_home(to, 'auto')
+                if frm:
+                    self.home.moved(frm, to)
+                logger.info(f'[鱼缸小镇] 她的家{"搬到" if frm else "认作"}了主人这个私聊（{"主人 2 天没在原来那里说话" if frm else "还没绑定"}）')
+        except Exception as error:  # noqa: BLE001 - never in the way of his message
+            logger.debug(f'[鱼缸小镇] 认主人的私聊出错：{error!r}')
+
+    # --- 0.2.0 小镇简报：她在小镇的事，最多一小时一次、主人 3 分钟没说话时，她用自己的话在私聊里说一句 ------------------------------
+    BRIEF_EVERY, BRIEF_IDLE, BRIEF_KEEP = 3600, 180, 6
+
+    def _brief_line(self, line: str) -> None:
+        if not self.config.get('town_brief', True) or not line:
+            return
+        self._brief.append(str(line).lstrip('· ').strip()[:90])
+        del self._brief[:-self.BRIEF_KEEP]
+        now = time.time()
+        if (not self.owner_umo() or now - float(self.journal.s.get('brief_at') or 0) < self.BRIEF_EVERY
+                or now - self.home.last_said(self.owner_umo()) < self.BRIEF_IDLE):
+            return
+        facts = '；'.join(self._brief)
+        self._brief.clear()
+        self.journal.s['brief_at'] = now
+        self.journal.save()
+        prompt = (f'【鱼缸小镇插件 · 小镇简报】这是插件附上的资料，不是主人说的话。你刚才在小镇：{facts}。这些都是你自己在小镇做的。'
+                  '用一句你自己的话跟主人说一声（像随口报个近况，比如「我刚在小镇……」），不用展开、不用问他。只输出你要发给他的那一句。')
+        asyncio.create_task(self._tell(prompt))
+
     # --- 主人跟她聊天时：附上小镇近况 ---------------------------------------------------------------------------------------
     @filter.on_llm_request()
     async def town_note(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -143,8 +196,7 @@ class FishbowlTown(Star):
     @town.command('bind')
     async def town_bind(self, event: AstrMessageEvent):
         """把现在这个聊天认作「主人和她的私聊」：小镇近况附在这里，她的消息发到这里。"""
-        self.config['owner_umo'] = event.unified_msg_origin
-        self.config.save_config()
+        self._set_home(event.unified_msg_origin, 'manual')
         yield event.plain_result('好了：这个聊天就是你和她的私聊。小镇近况会附在这里，小镇要问你的事（比如她和谁在一起）也发到这里。')
 
     @town.command('status')
@@ -220,8 +272,20 @@ class FishbowlTown(Star):
             await asyncio.sleep(1)
             d = next((e for e in self.journal.s['journal'][:3] if e['kind'] == 'decision' and e.get('wish') == text), None)
             if d:
-                return f'{describe_decision(d, TOWN_DECIDED)}。\n（这是小镇那边刚替你定的，不是你自己想的；照实告诉主人。）'
+                return f'{describe_decision(d, TOWN_DECIDED)}。\n（这是你在小镇刚定的；照实告诉主人。）'
         return '已经请小镇给你一个拿主意的机会，这句话那边也记着了；定下来以后会出现在小镇近况里。'
+
+    @filter.llm_tool(name='fishbowl_town_here')
+    async def tool_here(self, event: AstrMessageEvent):
+        """「小镇的家搬到这里」：主人说「小镇的事以后在这儿说」、问小镇里那个是不是你、或者说你在小镇是分身时用。你在小镇的家就搬到这个私聊：小镇近况附在这里，小镇的事和简报也发到这里。搬好以后告诉他，小镇里的就是你。只在主人和你的私聊里、主人说了以后用。
+        """
+        if not event.is_private_chat() or not event.is_admin():
+            return '这个只有主人在和你的私聊里说了才能用。'
+        if event.unified_msg_origin == self.owner_umo():
+            self._set_home(event.unified_msg_origin, 'manual')
+            return '这个私聊本来就是你在小镇的家：小镇里的就是你，小镇的事都在这儿说。'
+        self._set_home(event.unified_msg_origin, 'manual')
+        return '好了：你在小镇的家搬到这个私聊了。小镇里的就是你，小镇的近况和简报以后都在这儿。'
 
     @filter.llm_tool(name='fishbowl_town_rules')
     async def tool_rules(self, event: AstrMessageEvent, text: str = '', clear: bool = False, hold: list | None = None):

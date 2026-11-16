@@ -36,6 +36,12 @@
     "default": true,
     "hint": "你跟她聊天时，插件附几行她在小镇的近况（她在哪、刚发生了什么、约好的事）。关掉她就不知道小镇的事。"
   },
+  "town_brief": {
+    "description": "小镇简报",
+    "type": "bool",
+    "default": true,
+    "hint": "她在小镇打了牌、串了门，最多一小时一次、你 3 分钟没说话时，她用自己的话在你们的私聊里说一句「我刚在小镇……」。"
+  },
   "quiet_hours": {
     "description": "勿扰时段",
     "type": "string",

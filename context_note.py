@@ -22,7 +22,7 @@ COLD_WAIT = 1.5
 HEAD = '【鱼缸小镇插件 · 背景备注】这是插件附上的资料，不是主人说的话，不用回复它。'
 CLOSE = '他刚回来、问你在干嘛或今天怎么样的这一下，可以顺口说一件；他在说自己的事，就先听他的，留着不说；说过就算了。'
 FLOOR = '不催他来小镇、不让他愧疚、不提钱（他问起花销除外）。'
-FRESH_CLOSE = '这些是小镇那边照你的人设刚替你做的，你在聊天里当时不在场，算在你名下；认不认、要不要补一句由你。他问起或聊到小镇时照实说，他在说自己的事就先听他的。'
+FRESH_CLOSE = '这些是你刚才在小镇做的（插件用你的人设一步步替你答的），都是你的；他问起或聊到小镇时照实说，他在说自己的事就先听他的。'
 
 
 def _str(v, n: int = 40) -> str:
@@ -56,7 +56,7 @@ def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=()) ->
     if friends:
         lines.append(f"- 好朋友：{'、'.join(x for x in friends if x)}")
     for m in list(mind)[:1]:
-        lines.append(f"- 小镇那边最近替你定的：{_str(re.sub(r'^(?:你决定|小镇那边替你定了)：', '', str(m)), 40)}")
+        lines.append(f"- 你在小镇最近定的：{_str(re.sub(r'^(?:你决定|小镇那边替你定了|你在小镇定了)：', '', str(m)), 40)}")
     for a in list(asks)[:2]:
         lines.append(f'- {_str(a, 80)}')
     if not lines:
