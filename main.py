@@ -23,7 +23,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -199,7 +199,7 @@ class FishbowlTown(Star):
     # --- 她在和主人聊天时用的工具（只认主人的私聊） ------------------------------------------------------------------------
     @filter.llm_tool(name='fishbowl_town_go')
     async def tool_go(self, event: AstrMessageEvent, wish: str = '', plan: str = ''):
-        """「去小镇」：主人想让你去鱼缸小镇玩、报名打牌或去串门时用（填 wish）；你自己跟主人说了想去小镇做某件事时也用（填 plan），小镇那边会照着去。会请小镇马上给你一个拿主意的回合；去不去、玩什么由那边照你的性子定，回来的结果照实告诉主人。
+        """「去小镇」：你自己想去鱼缸小镇做什么（比如去码头钓鱼、报名打一局斗地主、去找阿鲸串门），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做。主人想让你去小镇玩、打牌或串门时也用它（填 wish），那时去不去由你。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
 
         Args:
             wish(string): 主人想让你做什么，用他的原话或简短转述
