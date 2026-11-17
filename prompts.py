@@ -11,7 +11,7 @@ GAME_ZH = {
 SILENT = '[沉默]'
 
 # 她可以让小镇那边先停住、等她一句的几类事（守则里的硬开关）
-HOLD_KINDS = {'spend': '请客、送礼、拍照点歌、请人画、出游聚会这些花钱的事', 'promise': '答应约定、约见面、许诺以后做什么'}
+HOLD_KINDS = {'spend': '请客、送礼、拍照点歌、请人画、出游聚会，还有钓鱼游泳、电玩城、手作材料这些从存钱罐出的小钱（打牌的座位费不算）', 'promise': '答应约定、约见面、许诺以后做什么'}
 
 
 def text_of(content) -> str:
@@ -52,6 +52,13 @@ def rules_block(rules: dict | None) -> list:
 HOLD_VISIT_SPEND = {'cafe': '请喝东西', 'gift': '送礼', 'trip': '请出游', 'photo': '请拍照', 'song': '点歌', 'paint': '请人画画', 'meal': '请吃饭'}
 HOLD_VISIT_PROMISE = {'promise': '答应一件以后的事'}
 HOLD_AGENCY_SPEND = {'gift': '送礼', 'paper_note': '登日报心意', 'trip': '请朋友出游', 'party': '办聚会', 'media': '拍照、点歌或请人画'}
+# 0.3.1（和 DSH 0.8.3 一样；11-17 一位 DSH 主人：「hold 拦不住顺带的钱……钓鱼的鱼饵 ¥0.04 照扣」）：花钱这一类也管镇上那些小钱——码头、电玩城、
+# 手作，不管写在地点字段、顶层的 do、想做的事（want），还是到点由小镇去办的计划步骤里。打牌的座位费、去收已经做好的手作不拦。
+HOLD_PLACE_SPEND = {'pier': {'fish': '去码头钓鱼', 'swim': '去码头游泳', 'cook': '拿鱼去做菜'}, 'arcade': {'play': '去电玩城玩机器'},
+                    'make': {'start': '买材料做手作', 'photo': '补拍收成照'}}
+BARE_DO_PLACE = {'fish': 'pier', 'swim': 'pier', 'cook': 'pier', 'play': 'arcade', 'start': 'make', 'photo': 'make'}
+WANT_SPEND = re.compile(r'钓|游泳|泡水|下水|打水仗|电玩城|娃娃机|抓娃娃|推币|街机|手作|种菜|养花|烘焙|陶艺')
+PLAN_SPEND = {'pier': '到点去码头', 'arcade': '到点去电玩城'}
 
 
 def _said(x, n: int = 24) -> str:
@@ -91,6 +98,30 @@ def hold_check(kind: str, answer: str, hold) -> tuple[list, str]:
                 if obj.get(k) not in (None, False, ''):
                     found.append(f'{zh}{_said(obj[k])}')
                     del obj[k]
+            for place, kinds in HOLD_PLACE_SPEND.items():
+                v = obj.get(place) if isinstance(obj.get(place), dict) else None
+                if v and v.get('do') in kinds:
+                    found.append(kinds[v['do']])
+                    del obj[place]
+                    if obj.get('action') == place:
+                        obj['action'] = 'none'
+            bare = BARE_DO_PLACE.get(obj.get('do')) if isinstance(obj.get('do'), str) else None
+            if bare:
+                found.append(HOLD_PLACE_SPEND[bare][obj['do']])
+                for k in ('do', 'casts', 'mode', 'machine', 'tries', 'activity', 'catch_id'):
+                    obj.pop(k, None)
+                if obj.get('action') == bare:
+                    obj['action'] = 'none'
+            if isinstance(obj.get('want'), str) and WANT_SPEND.search(obj['want']):
+                found.append(f"想做的事要花钱{_said(obj['want'])}")
+                del obj['want']
+            plan = obj.get('plan') if isinstance(obj.get('plan'), dict) else None
+            steps = plan.get('steps') if plan and isinstance(plan.get('steps'), list) else None
+            if steps:
+                keep = [x for x in steps if not (isinstance(x, dict) and x.get('do') in PLAN_SPEND)]
+                found += [f"计划里{PLAN_SPEND[x['do']]}" for x in steps if isinstance(x, dict) and x.get('do') in PLAN_SPEND]
+                if len(keep) != len(steps):
+                    obj['plan'] = {**plan, 'steps': keep}
         if 'promise' in on and isinstance(obj.get('phone'), dict) and obj['phone'].get('meet'):
             found.append(f"用小手机约人见面{_said(obj['phone']['meet'])}")
             del obj['phone']
