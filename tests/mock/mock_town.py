@@ -107,6 +107,7 @@ class Town:
             self.log = []              # every turn's outcome
             self.games = []
             self.visits = []
+            self.visit_rows = {}
             self.new = False
             self.floors = None
             self.settings_calls = []
@@ -207,7 +208,7 @@ class Town:
         result['score'] = wins
         self.games.append(result)
         self.notify('outside_fee', {'gid': gid, 'cents': 5, 'facts': '猜拳馆座位费 5 分（1 分 × 5）'})
-        self.notify('digest', {'gid': gid, 'game': 'rps', 'game_name': '猜拳', 'game_zh': '猜拳', 'as': '小圆子', 'result': 'win' if won else 'lose',
+        self.notify('digest', {'gid': gid, 'game_id': gid, 'game': 'rps', 'game_name': '猜拳', 'game_zh': '猜拳', 'as': '小圆子', 'result': 'win' if won else 'lose',
                                'facts': f'和阿鲸猜拳三局两胜，{wins[0]}:{wins[1]}，{"小圆子赢了" if won else "阿鲸赢了"}。',
                                'points_delta': 2 if won else -1})
         return result
@@ -233,6 +234,11 @@ class Town:
             else:
                 outcome['default'] += 1                      # no line this time
         self.visits.append(outcome)
+        # 0.3.0: this visit's every line at visits/<vid> (she is the host here: 阿鲸 came to her place)
+        self.visit_rows[vid] = ({'visit_id': vid, 'state': 'done', 'role': 'host', 'with': {'fish_id': 'f_whale', 'name': '阿鲸'}, 'place': 'home',
+                                 'place_name': '你家', 'lines': len(dialogue), 'summary': '阿鲸来家里串门', 'ending': '阿鲸说下次再来'},
+                                [{'seq': i, 'name': d['name'], 'role': 'guest' if d['name'] == OTHER['name'] else 'host', 'text': d['line'], 'ts': time.time()}
+                                 for i, d in enumerate(dialogue)])
         self.notify('visit', {'visit_id': vid, 'state': 'done', 'with': {'fish_id': 'f_whale', 'name': '阿鲸'}, 'with_name': '阿鲸', 'place_name': '你家', 'place_zh': '你家', 'summary': '阿鲸来家里串门，聊了码头的风和斗地主。', 'facts': '阿鲸来家里串门，聊了一会儿。',
                               'dialogue': dialogue})
         return outcome
@@ -708,6 +714,7 @@ def make_handler(town: Town):
                         'vs_mock000002': ({'visit_id': 'vs_mock000002', 'state': 'not_home', 'role': 'guest', 'with': {'fish_id': 'f2', 'name': '小满'},
                                            'place': 'home', 'place_name': '小满的家', 'started': now - 7200, 'ended': None, 'lines': 0,
                                            'topics': [], 'summary': '', 'ending': ''}, [])}
+                rows.update(town.visit_rows)
                 if route == 'visits':
                     return self._send(200, {'visits': [v for v, _l in rows.values()], 'more': False})
                 got = rows.get(route[len('visits/'):])

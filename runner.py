@@ -9,6 +9,7 @@ import re
 import time
 
 from . import events as ev
+from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
 from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
@@ -27,15 +28,18 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 
 class Runner:
-    def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time):
+    def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time,
+                 owner_life=None, on_echo=None, recap=lambda: True):
         self.client, self.journal, self.ask = client, journal, ask
         self.tell, self.notify, self.brief = tell, notify, brief
         self.quiet, self.her_name = quiet, her_name
+        self.owner_life, self.on_echo, self.recap_on = owner_life, on_echo, recap   # 0.3.0 两边是同一个她
+        self.life_refs: dict = {}   # 已经带过「你和主人最近的事」的那几局（一局只在第一轮带）
         self.log = log or logging.getLogger('fishbowl_town')
         self.now = now
         self.seen: dict = {}
         self.stats = {'turns': 0, 'answered': 0, 'invalid': 0, 'late': 0, 'closed': 0, 'errors': 0, 'events': 0, 'held': 0,
-                      'connected': False, 'problem': '', 'last_turn_at': 0}
+                      'connected': False, 'problem': '', 'last_turn_at': 0, 'echo': 0}
         self.running = False
         self._tasks: list = []
         self._auth_told = 0
@@ -76,6 +80,20 @@ class Runner:
                 plan = (j.pending_wish() if j.wish_is_own() else '') or j.doing()
                 if plan:
                     mind['plan'] = plan
+            # 0.3.0：她和主人最近的几句（过滤过）。拿主意、串门每次带；牌局只在一局的第一轮带。回声检查每一轮都比
+            life = await self._life()
+            secret = None
+            if life:
+                ref = str((turn.get('packet') or {}).get('ref') or '')
+                if kind in ('agency', 'visit'):
+                    mind['life'] = life
+                elif kind == 'game' and ref and ref not in self.life_refs:
+                    mind['life'] = life
+                    self.life_refs[ref] = self.now()
+                    if len(self.life_refs) > 200:
+                        self.life_refs.pop(next(iter(self.life_refs)))
+                msgs = (turn.get('packet') or {}).get('messages') or []
+                secret = echo_index(life, allow=' '.join(str(m.get('content') if isinstance(m, dict) else '') for m in msgs if isinstance(msgs, list)))
             prompt = build_turn_prompt(turn, seconds_left=int(self.left(turn, received)), **mind)
             raw = await self._ask(prompt, self.left(turn, received))
             answer = to_answer(turn, raw)
@@ -100,6 +118,32 @@ class Runner:
                         j.held(f)
                     self.stats['held'] += len(held)
                     self.log.info(f'回合 {tid}：按她的规矩停住了 {len(held)} 件要她点头的事')
+            # 0.3.0 回声检查：她要说出去的话里带出了主聊天里的事（连着 6 个汉字一样 / 同一串数字）：先请她重答，还带着就把那几句去掉
+            if answer is not None and secret and not secret['empty']:
+                fmt = 'text' if ((turn.get('packet') or {}).get('reply') or {}).get('format') == 'text' else 'json'
+                hits, clean = echo_check(answer, secret, fmt=fmt)
+                if hits:
+                    self.stats['echo'] += 1
+                    fixed = False
+                    if self.left(turn, received) >= RETRY_MIN:
+                        try:
+                            again = to_answer(turn, await self._ask(again_prompt(prompt, answer, ECHO_CORRECTION), self.left(turn, received)))
+                        except Exception:  # noqa: BLE001 - 重答失败就用去掉以后的
+                            again = None
+                        if again is not None:
+                            h2, c2 = echo_check(again, secret, fmt=fmt)
+                            if not h2:
+                                answer, fixed = again, True
+                            else:
+                                clean = c2
+                    if not fixed:
+                        answer = clean
+                    if self.on_echo:
+                        try:
+                            self.on_echo({'kind': kind, 'fixed': fixed, 'n': len(hits)})
+                        except Exception:  # noqa: BLE001 - 只是记一笔
+                            pass
+                    self.log.info(f"回合 {tid}：她的话带出了主聊天里的事，{'换了个说法' if fixed else '那几句没发'}")
             if answer is None:
                 self.stats['invalid'] += 1
                 await self._pass_activity(turn, received)
@@ -143,6 +187,21 @@ class Runner:
             await self._pass_activity(turn, received)
         finally:
             self.seen[tid] = 'done'
+
+    async def _life(self) -> list:
+        if not self.owner_life:
+            return []
+        try:
+            return list(await asyncio.wait_for(self.owner_life(), 2) or [])
+        except Exception:  # noqa: BLE001 - 读不到就不带
+            return []
+
+    async def _recap_visit(self, ref: str):
+        try:
+            one = await self.client.visit_lines(ref)
+            self.journal.recap(ref, 'visit', recap_visit(one, her_names=[self.her_name()]))
+        except Exception as error:  # noqa: BLE001 - 取不到原话就只有一行结果
+            self.log.debug(f'取串门原话整理经过失败：{error!r}')
 
     async def _post(self, tid: str, answer: str, turn: dict, received: float):
         """交答案时小镇正好在重启：时限内每秒再交一次。"""
@@ -234,6 +293,14 @@ class Runner:
             if kind == 'outside_turn' and d and d.get('what') == 'timeout' and d.get('ref'):
                 j.miss(d['ref'])
             table = j.table(d.get('game_id') or d.get('ref')) if kind == 'digest' and d else None
+            on = self.recap_on()
+            if kind == 'digest' and d and on:
+                ref = str(d.get('game_id') or d.get('ref') or '')
+                raw = j.table_raw(ref) or {}
+                result = re.sub(r'^[^：]{1,8}：', '', re.sub(r'[。.]\s*$', '', str(d.get('facts') or d.get('summary') or '')))
+                j.recap(ref, 'game', recap_game({'title': d.get('game_name') or d.get('game_zh') or '', 'result': result, 'moves': raw.get('moves') or []}))
+            if kind == 'visit' and d and on and (d.get('visit_id') or d.get('ref')):
+                self._tasks.append(asyncio.create_task(self._recap_visit(str(d.get('visit_id') or d.get('ref')))))
             if table:
                 it = {**it, 'data': {**d, 'facts': re.sub(r'[。.]\s*$', '', str(d.get('facts') or d.get('summary') or '')) + table['note']}}
             line = ev.describe(it)

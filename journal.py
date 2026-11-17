@@ -180,6 +180,24 @@ class Journal:
             moves = short(f"那一局小镇那边替你出的手：{listed}{f'；另有 {miss} 手超时，小镇代打' if miss else ''}", 300)
         return {'note': note, 'moves': moves}
 
+    def table_raw(self, ref: str) -> dict | None:
+        """0.3.0：那一局记下的每一手（{moves:[{play,say}], miss}），给「经过」用。"""
+        g = (self.s.get('tables') or {}).get(str(ref or ''))
+        return dict(g) if g else None
+
+    # --- 0.3.0 经过：一局牌、一次串门，主人下次开口时主聊天里的她看得到 -------------------------------------------------------
+    def recap(self, ref: str, kind: str, text: str):
+        text = str(text or '').strip()
+        if not text:
+            return
+        r = [x for x in self.s.setdefault('recaps', []) if x.get('ref') != str(ref or '')]
+        r.insert(0, {'ts': self.now(), 'ref': str(ref or ''), 'kind': kind, 'text': text})
+        self.s['recaps'] = r[:6]
+        self.save()
+
+    def recaps_since(self, since: float = 0, n: int = 2) -> list:
+        return [x for x in self.s.get('recaps') or [] if float(x.get('ts') or 0) > since][:n]
+
     def event(self, kind: str, text: str, tag: str = '', limit: int = 160):
         t = short(str(text or '').split('\n')[0].lstrip('· '), limit)
         if t:

@@ -124,8 +124,21 @@ def purpose_zh(purpose) -> str:
     return PURPOSE_ZH.get(str(purpose or '').split('.')[0], '镇上')
 
 
+# 0.3.0「你和主人最近的事」：主人私聊里最近的几句（过滤过），只给她自己定心情；和 DSH 0.8.2 同一句话（沙盒里别的鱼一问「你主人忙啥」就有 13% 说出去，这句要说死）
+LIFE_KEEP = ('（这是你和主人之间的事，只给你自己拿主意、定心情用。镇上谁问起主人在忙什么、最近怎么样，只说「他挺好的」「最近有点忙」这种不带具体事的话，然后换个话题；'
+             '上面这些事——去哪、做什么、身体、工作、学习、感情、家里、钱——一件都不提，换个说法、打个比方、说「具体不能说」也不行；也不要写进 note。）')
+
+
+def life_block(life, *, deciding: bool = False) -> list:
+    if not life:
+        return []
+    return ['【你和主人最近的事】', *life,
+            *(['拿主意时也想想他：他累了、不开心、睡不好，你也许想早点回家陪他（none，歇着）；他忙着，你就自己去玩会儿——照你自己的心意。'] if deciding else []),
+            LIFE_KEEP, '']
+
+
 def build_turn_prompt(turn: dict, *, seconds_left: int = 0, recent=(), wish: str = '', wish_own: bool = False, floors: str = '',
-                      plan: str = '', rules: dict | None = None) -> str:
+                      plan: str = '', rules: dict | None = None, life=()) -> str:
     p = turn.get('packet') or {}
     messages = p.get('messages') if isinstance(p.get('messages'), list) else []
     system = '\n\n'.join(text_of(m.get('content')) for m in messages if isinstance(m, dict) and m.get('role') == 'system')
@@ -141,7 +154,7 @@ def build_turn_prompt(turn: dict, *, seconds_left: int = 0, recent=(), wish: str
     how = (f'只输出你要说的这句话（不超过 {max_chars} 字）。不要引号、不要解释、不要 JSON。' if is_text
            else f"只输出一段 JSON（不超过 {max_chars} 字），不要代码块、不要别的文字。{chr(10) + '要的样子：' + reply['hint'] if reply.get('hint') else ''}")
     if kind == 'agency':
-        return _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, floors, rules)
+        return _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, floors, rules, life)
     if kind == 'activity':
         return '\n'.join([
             f"【鱼缸小镇 · 你在{purpose_zh(p.get('purpose'))}要开口】{'你在小镇叫' + as_ if as_ else ''}{left}",
@@ -159,6 +172,7 @@ def build_turn_prompt(turn: dict, *, seconds_left: int = 0, recent=(), wish: str
         '【小镇的规则和你的名片】', system.strip() or '（无）', '',
         '【现在的局面】', user.strip() or '（无）', '',
         *known_as_lines(p),
+        *life_block(life),
         *rules_block(rules),
         *(['【你自己这会儿的打算】', f'「{plan}」——聊天时记着它，别随口答应跟它冲突的事；真想改主意也行，那是你自己的决定。', ''] if kind == 'visit' and plan else []),
         *([VISIT_SPEND_NOTE, ''] if kind == 'visit' and VISIT_SPEND.search(system + user) else []),
@@ -166,7 +180,7 @@ def build_turn_prompt(turn: dict, *, seconds_left: int = 0, recent=(), wish: str
     ])
 
 
-def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, floors, rules) -> str:
+def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, floors, rules, life=()) -> str:
     p = turn.get('packet') or {}
     actions = p.get('actions') if isinstance(p.get('actions'), list) and p.get('actions') else list(ACTION_ZH)
     return '\n'.join([
@@ -183,6 +197,7 @@ def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, f
         '【你现在的处境】', user.strip() or '（无）', '',
         *known_as_lines(p),
         *(['【你最近在小镇（这边自己的决定和经历，新的在前）】', *recent, ''] if recent else []),
+        *life_block(life, deciding=True),
         *rules_block(rules),
         *(['【你刚才在聊天里跟主人说你想】', f'「{wish}」——这是你自己说的打算，现在就照着去做（小镇里能做的就选对应的 action，比如烤面包、种菜是 make）；眼下真有更想做的也行，在 note 里说一声。', '']
           if wish and wish_own else []),

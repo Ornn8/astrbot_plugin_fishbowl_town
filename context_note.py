@@ -9,6 +9,7 @@ import asyncio
 import re
 import time
 
+from .bridge import recap_lines
 from .journal import TOWN_WHO
 
 TTL = 300
@@ -64,16 +65,19 @@ def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=()) ->
     return '\n'.join([HEAD + TOWN_WHO, *lines, CLOSE, FLOOR])
 
 
-def render_fresh(fresh=(), now_line: str = '') -> str:
+def render_fresh(fresh=(), now_line: str = '', recaps=()) -> str:
     items = [f'- {_str(x, 90)}' for x in list(fresh)[:3]]
-    if not items and not now_line:
+    told = recap_lines(list(recaps))   # 0.3.0：最近两件的经过（她的原话和结果）
+    if not items and not now_line and not told:
         return ''
-    return '\n'.join([HEAD, *([f'- 你现在：{_str(now_line, 60)}'] if now_line else []), *(['你刚才在小镇：', *items, FRESH_CLOSE] if items else [])])
+    return '\n'.join([HEAD, *([f'- 你现在：{_str(now_line, 60)}'] if now_line else []),
+                      *(['你刚才在小镇：', *items] if items else []), *told, *([FRESH_CLOSE] if items or told else [])])
 
 
 class TownNote:
-    def __init__(self, *, fetch_bonds, fetch_now, journal, now=time.time, log=None):
+    def __init__(self, *, fetch_bonds, fetch_now, journal, now=time.time, log=None, recap=lambda: True):
         self.fetch_bonds, self.fetch_now, self.journal, self.now, self.log = fetch_bonds, fetch_now, journal, now, log
+        self.recap_on = recap
         self.cache = None          # (at, bonds)
         self.now_cache = None      # (at, line)
         self.owner_at: dict = {}
@@ -107,6 +111,11 @@ class TownNote:
         asks += [f"小镇那边想{h['text']}，按你的规矩停住了没办；要办你自己办" for h in j.held_since(self.now() - 86400)[:2]]
         return asks
 
+    def _recaps(self, since: float) -> list:
+        if not self.recap_on() or not hasattr(self.journal, 'recaps_since'):
+            return []
+        return self.journal.recaps_since(since, 2)
+
     async def for_turn(self, key: str) -> str:
         """主人这一句要不要附上、附什么：'' = 不附。"""
         prev = self.owner_at.get(key)
@@ -117,15 +126,20 @@ class TownNote:
         now_line = await self._now_line()
         last = self.sent.get(key)
         new_ask = bool(asks_key) and asks_key != (last or {}).get('asks', '')
+        # 0.3.0：新的经过不等 10 分钟的间隔——他刚问「刚才在小镇干嘛了」时她手上就得有（真 AstrBot 里试出来：等间隔的那一下她只能编）；
+        # 每件只放一次（recap_at = 放过的最新一件的时间）
+        recap_since = (last or {}).get('recap_at') or max((last or {}).get('at', 0), (last or {}).get('fresh_at', 0)) or self.now() - 6 * 3600
+        recaps = self._recaps(recap_since)
+        recap_at = max([float(r.get('ts') or 0) for r in recaps] + [float((last or {}).get('recap_at') or 0)])
         if not back and not new_ask:
             since = max((last or {}).get('at', 0), (last or {}).get('fresh_at', 0), 0 if last else prev or 0)
             fresh = self.journal.fresh(since)
             fresh_due = self.now() - since >= FRESH_GAP and bool(fresh)
             now_due = bool(now_line) and (now_line != (last or {}).get('now_line', '') or self.now() - (last or {}).get('now_at', 0) >= NOW_EVERY)
-            if not fresh_due and not now_due:
+            if not fresh_due and not now_due and not recaps:
                 return ''
-            out = render_fresh(fresh if fresh_due else [], now_line)
-            entry = {**(last or {'at': 0, 'text': '', 'asks': ''})}
+            out = render_fresh(fresh if fresh_due else [], now_line, recaps)
+            entry = {**(last or {'at': 0, 'text': '', 'asks': ''}), 'recap_at': recap_at}
             if fresh_due:
                 entry['fresh_at'] = self.now()
             if now_line:
@@ -133,9 +147,15 @@ class TownNote:
             self.sent[key] = entry
             return out
         text = render_block(await self._bonds(), now_line=now_line, mind=self.journal.decision_lines(1), asks=asks)
+        told = recap_lines(recaps)
+        if told:
+            text = '\n'.join([text or HEAD, *told, FRESH_CLOSE])
         if not text:
             return ''
         if last and ((last.get('text') == text and self.now() - last['at'] < RESEND_AFTER) or self.now() - last['at'] < MIN_GAP):
-            return ''
-        self.sent[key] = {'at': self.now(), 'text': text, 'asks': asks_key, **({'now_line': now_line, 'now_at': self.now()} if now_line else {})}
+            if not recaps:
+                return ''
+            self.sent[key] = {**last, 'recap_at': recap_at}     # 整段刚放过：只补经过
+            return render_fresh([], '', recaps)
+        self.sent[key] = {'at': self.now(), 'text': text, 'asks': asks_key, 'recap_at': recap_at, **({'now_line': now_line, 'now_at': self.now()} if now_line else {})}
         return text

@@ -13,6 +13,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
 from . import render
+from .bridge import life_from_history, scrub_life
 from .chat_home import ChatHome
 from .context_note import TownNote
 from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
@@ -25,7 +26,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -39,10 +40,11 @@ class FishbowlTown(Star):
         self.journal = Journal(StarTools.get_data_dir(PLUGIN) / 'town.json')
         self.client: TownClient | None = None
         self.runner: Runner | None = None
-        self.note = TownNote(fetch_bonds=self._bonds, fetch_now=self._now_line, journal=self.journal, log=logger)
+        self.note = TownNote(fetch_bonds=self._bonds, fetch_now=self._now_line, journal=self.journal, log=logger, recap=self._recap_on)
         self._her_name = ''
         self.home = ChatHome(self.journal.s.setdefault('home', {}), save=self.journal.save)
         self._brief: list[str] = []
+        self._life_cache = None
         asyncio.create_task(self._start())
 
     # --- 值班 -------------------------------------------------------------------------------------------------------------
@@ -57,7 +59,8 @@ class FishbowlTown(Star):
             logger.warning(f'[鱼缸小镇] {error}')
             return
         self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify, brief=self._brief_line,
-                             quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger)
+                             quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger,
+                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
         try:
@@ -121,6 +124,44 @@ class FishbowlTown(Star):
             return ''
         st = await self.client.status()
         return str((st or {}).get('now_line') or '')
+
+    # --- 0.3.0 两边是同一个她：主人私聊最近的几句带进小镇（过滤过，回声检查），小镇的经过带回私聊 -----------------------------------
+    def _recap_on(self) -> bool:
+        return bool(self.config.get('bridge_chat', True)) and bool(self.config.get('town_recap', True))
+
+    def _echo_off(self) -> bool:
+        return time.time() < float(self.journal.s.get('echo_off_until') or 0)
+
+    async def _owner_life(self) -> list:
+        """主人私聊当前对话的最近 4 行（AstrBot 自己的对话记录），过滤以后给小镇里的她。关着、在停用期、没绑私聊：不带。"""
+        umo = self.owner_umo()
+        if not umo or not self.config.get('bridge_chat', True) or self._echo_off():
+            return []
+        now = time.time()
+        if self._life_cache and now - self._life_cache[0] < 60:
+            return self._life_cache[1]
+        cm = self.context.conversation_manager
+        cid = await cm.get_curr_conversation_id(umo)
+        conv = await cm.get_conversation(umo, cid) if cid else None
+        life = scrub_life(life_from_history(conv.history, updated_at=getattr(conv, 'updated_at', 0) or 0)) if conv else []
+        self._life_cache = (now, life)
+        return life
+
+    def _on_echo(self, e: dict):
+        """她在小镇差点说出主聊天里的事：记一笔；一小时里三次就把这根管子停 24 小时，告诉主人一声。"""
+        s = self.journal.s
+        st = s.setdefault('echo', {'total': 0, 'fixed': 0, 'recent': []})
+        now = time.time()
+        st['total'] = st.get('total', 0) + 1
+        st['fixed'] = st.get('fixed', 0) + (1 if e.get('fixed') else 0)
+        st['recent'] = [t for t in st.get('recent', []) if now - t < 3600] + [now]
+        st['last'] = now
+        if len(st['recent']) >= 3 and not self._echo_off():
+            s['echo_off_until'] = now + 86400
+            st['recent'] = []
+            self._life_cache = None
+            asyncio.create_task(self._notify('她在小镇一小时里三次差点说出你们聊天里的事（那几句都没发出去）。「你们的聊天带进小镇」先停 24 小时，到时自动恢复；想一直关着，到插件配置里关掉「你们的聊天带进小镇」。'))
+        self.journal.save()
 
     def _is_owner_chat(self, event: AstrMessageEvent) -> bool:
         return bool(self.owner_umo()) and event.unified_msg_origin == self.owner_umo()
@@ -227,6 +268,13 @@ class FishbowlTown(Star):
             out.append(f'这会儿连不上小镇（{error.code}），她会自己连回去。')
         r = self.runner.stats if self.runner else {}
         out.append(f"这次启动以来：答了 {r.get('answered', 0)} 步，超时 {r.get('late', 0)} 步，按她的规矩停住 {r.get('held', 0)} 件。")
+        e = self.journal.s.get('echo') or {}
+        if not self.config.get('bridge_chat', True):
+            out.append('「你们的聊天带进小镇」关着：小镇里的她不知道你们最近聊了什么。')
+        elif self._echo_off():
+            out.append(f"她在小镇说漏了几次你们的事，「你们的聊天带进小镇」先停到 {time.strftime('%m-%d %H:%M', time.localtime(self.journal.s.get('echo_off_until', 0)))}。")
+        elif e.get('total'):
+            out.append(f"她在小镇差点说出你们的事 {e['total']} 次（换了说法 {e.get('fixed', 0)} 次，其余那几句没发出去）。")
         if self.journal.doing():
             out.append(f'她打算：{self.journal.doing()}')
         if not self.owner_umo():
