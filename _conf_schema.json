@@ -65,5 +65,11 @@
     "type": "string",
     "default": "https://fishbowltown.com/town/api/outside/",
     "invisible": true
+  },
+  "auto_update": {
+    "description": "自动更新",
+    "type": "bool",
+    "default": false,
+    "hint": "有新版本时自己更新（从鱼缸小镇官网下载、核对校验值，原地覆盖，设置都保留），更新完在你们的私聊里说一声。关着时只告诉你有新版本，你发 /town update 再更新。"
   }
 }

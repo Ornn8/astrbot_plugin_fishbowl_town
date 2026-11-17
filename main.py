@@ -12,7 +12,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
-from . import render
+from . import render, updater
 from .bridge import life_from_history, scrub_life
 from .chat_home import ChatHome
 from .context_note import TownNote
@@ -26,7 +26,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -45,7 +45,9 @@ class FishbowlTown(Star):
         self.home = ChatHome(self.journal.s.setdefault('home', {}), save=self.journal.save)
         self._brief: list[str] = []
         self._life_cache = None
+        self._install_task = None                  # never cancelled by terminate(): AstrBot calls terminate() in the middle of it
         asyncio.create_task(self._start())
+        self._update_loop_task = asyncio.create_task(self._update_loop())
 
     # --- 值班 -------------------------------------------------------------------------------------------------------------
     async def _start(self):
@@ -70,10 +72,72 @@ class FishbowlTown(Star):
             pass
 
     async def terminate(self):
+        if self._update_loop_task and not self._update_loop_task.done():
+            self._update_loop_task.cancel()
         if self.runner:
             await self.runner.stop()
         if self.client:
             await self.client.close()
+
+    # --- 插件自己更新（updater.py） ---------------------------------------------------------------------------------------------
+    async def _update_loop(self):
+        await asyncio.sleep(5)
+        pending = self.journal.s.get('update_pending') or {}
+        if pending:                                 # the previous instance installed this one
+            self.journal.s.pop('update_pending', None)
+            self.journal.save()
+            if pending.get('to') == VERSION and pending.get('umo'):
+                try:
+                    await self.context.send_message(pending['umo'], MessageChain().message(f'【鱼缸小镇插件】已经更新到 {VERSION}，设置都还在。'))
+                except Exception as error:  # noqa: BLE001
+                    logger.warning(f'[鱼缸小镇] 更新完成的消息没发出去：{error}')
+        await asyncio.sleep(updater.FIRST_CHECK)
+        while True:
+            try:
+                await self._check_update()
+            except Exception as error:  # noqa: BLE001 - a check less, never the plugin
+                logger.warning(f'[鱼缸小镇] 检查新版本失败：{error}')
+            await asyncio.sleep(updater.CHECK_EVERY)
+
+    async def _check_update(self):
+        info = await updater.fetch_latest()
+        if not info or not updater.newer(info['version'], VERSION):
+            return
+        if self.config.get('auto_update', False):
+            if self.journal.s.get('update_failed') != info['version']:
+                self._start_install(info, self.owner_umo())
+            return
+        if self.journal.s.get('update_told') == info['version'] or not self.owner_umo():
+            return
+        await self._notify(updater.told_text(info, VERSION))
+        self.journal.s['update_told'] = info['version']
+        self.journal.save()
+
+    def _start_install(self, info: dict, umo: str) -> bool:
+        if self._install_task and not self._install_task.done():
+            return False
+        self._install_task = asyncio.create_task(self._install(info, umo))
+        return True
+
+    async def _install(self, info: dict, umo: str):
+        try:
+            path = await updater.download(info, StarTools.get_data_dir(PLUGIN) / 'update')
+            self.journal.s['update_pending'] = {'to': info['version'], 'from': VERSION, 'umo': umo}
+            self.journal.save()
+            logger.info(f"[鱼缸小镇] 更新到 {info['version']}（sha256 已核对）")
+            await updater.install(self.context, path)
+        except Exception as error:  # noqa: BLE001 - tell him why, keep running the old one
+            self.journal.s.pop('update_pending', None)
+            self.journal.s['update_failed'] = info['version']
+            self.journal.save()
+            logger.warning(f'[鱼缸小镇] 更新失败：{error}')
+            if umo:
+                try:
+                    await self.context.send_message(umo, MessageChain().message(
+                        f"【鱼缸小镇插件】更新到 {info['version']} 没成：{error}。现在还是 {VERSION}，照常在小镇值班。"
+                        f"也可以手动更新：下载 {info['url']}，在 AstrBot 插件页上传安装（同名覆盖，设置保留）。"))
+                except Exception:  # noqa: BLE001
+                    pass
 
     def owner_umo(self) -> str:
         return str(self.config.get('owner_umo') or '').strip()
@@ -240,6 +304,23 @@ class FishbowlTown(Star):
         self._set_home(event.unified_msg_origin, 'manual')
         yield event.plain_result('好了：这个聊天就是你和她的私聊。小镇近况会附在这里，小镇要问你的事（比如她和谁在一起）也发到这里。')
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @town.command('update')
+    async def town_update(self, event: AstrMessageEvent):
+        """更新鱼缸小镇插件到最新版（设置保留）"""
+        info = await updater.fetch_latest()
+        if info is None:
+            yield event.plain_result('这会儿读不到官网的版本信息，过会儿再试。')
+            return
+        if not updater.newer(info['version'], VERSION):
+            yield event.plain_result(f'已经是最新版（{VERSION}）。')
+            return
+        self.journal.s.pop('update_failed', None)
+        if not self._start_install(info, event.unified_msg_origin):
+            yield event.plain_result('已经在更新了，稍等。')
+            return
+        yield event.plain_result(f"开始更新到 {info['version']}（现在 {VERSION}）：下载、核对、安装，AstrBot 会重载插件，十几秒后好了会在这里说一声。")
+
     @town.command('status')
     async def town_status(self, event: AstrMessageEvent):
         """她在小镇的状态"""
@@ -256,9 +337,13 @@ class FishbowlTown(Star):
         """她最近的串门；/town chats 编号 看那一次的原话"""
         yield event.plain_result(await self._chats(n, '她', '（/town chats 编号 看那一次的原话）'))
 
+    def _version_line(self) -> str:
+        told = self.journal.s.get('update_told') or ''
+        return f'插件版本 {VERSION}' + (f'（有新版 {told}：发 /town update）' if updater.newer(told, VERSION) else '')
+
     async def _status_text(self) -> str:
         if not self.client:
-            return OFF_DUTY
+            return OFF_DUTY + '\n' + self._version_line()
         out = []
         try:
             st = await self.client.status()
@@ -280,6 +365,7 @@ class FishbowlTown(Star):
         if not self.owner_umo():
             out.append('还没绑定你和她的私聊：在私聊里发 /town bind。')
         out.append(f'在地图上找她：https://fishbowltown.com/town/tour')
+        out.append(self._version_line())
         return '\n'.join(out)
 
     async def _chats(self, n: int, name: str, hint: str) -> str:
