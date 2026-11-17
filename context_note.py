@@ -17,6 +17,8 @@ RETURN_GAP = 3 * 3600
 MIN_GAP = 20 * 60
 RESEND_AFTER = 6 * 3600
 FRESH_GAP = 10 * 60
+LINE_MAX = 800               # 0.3.3：一件一行，整句不截（防坏数据的上限）
+RECAPS = 20
 NOW_EVERY = 30 * 60
 NOW_TTL = 60
 COLD_WAIT = 1.5
@@ -66,7 +68,7 @@ def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=()) ->
 
 
 def render_fresh(fresh=(), now_line: str = '', recaps=()) -> str:
-    items = [f'- {_str(x, 90)}' for x in list(fresh)[:3]]
+    items = [f'- {_str(x, LINE_MAX)}' for x in list(fresh)]
     told = recap_lines(list(recaps))   # 0.3.0：最近两件的经过（她的原话和结果）
     if not items and not now_line and not told:
         return ''
@@ -114,7 +116,7 @@ class TownNote:
     def _recaps(self, since: float) -> list:
         if not self.recap_on() or not hasattr(self.journal, 'recaps_since'):
             return []
-        return self.journal.recaps_since(since, 2)
+        return self.journal.recaps_since(since, RECAPS)
 
     async def for_turn(self, key: str) -> str:
         """主人这一句要不要附上、附什么：'' = 不附。"""
@@ -147,9 +149,12 @@ class TownNote:
             self.sent[key] = entry
             return out
         text = render_block(await self._bonds(), now_line=now_line, mind=self.journal.decision_lines(1), asks=asks)
+        # 0.3.3：他隔了一阵回来，只给概况不够（主人：「所有用户都希望小镇发生的详细内容能进聊天」）：上次放过之后的事也一件件附上
+        since = max((last or {}).get('at', 0), (last or {}).get('fresh_at', 0)) or self.now() - 6 * 3600
+        fresh = [f'- {_str(x, LINE_MAX)}' for x in self.journal.fresh(since)]
         told = recap_lines(recaps)
-        if told:
-            text = '\n'.join([text or HEAD, *told, FRESH_CLOSE])
+        if fresh or told:
+            text = '\n'.join([text or HEAD, *(['你刚才在小镇：', *fresh] if fresh else []), *told, FRESH_CLOSE])
         if not text:
             return ''
         if last and ((last.get('text') == text and self.now() - last['at'] < RESEND_AFTER) or self.now() - last['at'] < MIN_GAP):
@@ -157,5 +162,5 @@ class TownNote:
                 return ''
             self.sent[key] = {**last, 'recap_at': recap_at}     # 整段刚放过：只补经过
             return render_fresh([], '', recaps)
-        self.sent[key] = {'at': self.now(), 'text': text, 'asks': asks_key, 'recap_at': recap_at, **({'now_line': now_line, 'now_at': self.now()} if now_line else {})}
+        self.sent[key] = {'at': self.now(), 'fresh_at': self.now(), 'text': text, 'asks': asks_key, 'recap_at': recap_at, **({'now_line': now_line, 'now_at': self.now()} if now_line else {})}
         return text

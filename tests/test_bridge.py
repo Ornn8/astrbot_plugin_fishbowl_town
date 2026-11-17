@@ -90,9 +90,11 @@ def test_game_recap_result_her_moves_and_words_within_150():
     assert recap_game(None) == ''
 
 
-def test_her_chat_gets_the_two_newest_recaps_after_the_fresh_lines():
+def test_her_chat_gets_every_new_recap_oldest_first_after_the_fresh_lines():
+    # 0.3.3（主人 11-17「我要的是全部内容」）：没放过的每一件、按先后排
     recaps = [{'ts': 3000, 'kind': 'visit', 'text': '你去找阿鲸……'}, {'ts': 2000, 'kind': 'game', 'text': '斗地主：赢了'}, {'ts': 1000, 'kind': 'game', 'text': '更早的一局'}]
-    assert recap_lines(recaps, 1500) == ['经过（你刚才在小镇的原话和结果）：', '- 串门：你去找阿鲸……', '- 牌局：斗地主：赢了']
+    assert recap_lines(recaps, 1500) == ['经过（你刚才在小镇的原话和结果）：', '- 牌局：斗地主：赢了', '- 串门：你去找阿鲸……']
+    assert len(recap_lines(recaps, 0)) == 4
     assert recap_lines(recaps, 5000) == []
     out = context_note.render_fresh([], '', recaps[:2])
     assert '- 串门：你去找阿鲸……' in out and '更早的一局' not in out and '都是你的' in out

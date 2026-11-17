@@ -16,7 +16,14 @@ KIND_ZH = {
 QUIET = {'outside_fee', 'ad', 'outside_ghost'}
 # 哪些事算「你刚才在小镇」（主人下次开口时补一小段）
 FRESH_TAG = {'digest': 'game', 'visit': 'visit', 'media': 'media', 'paint_bought': 'media', 'heart_together': 'heart', 'heart_consent': 'heart',
-             'crime': 'crime', 'social': 'social', 'outside_receipt': 'social', 'highlight': 'moment', 'friend_made': 'social', 'phone': 'social'}
+             'crime': 'crime', 'social': 'social', 'outside_receipt': 'did', 'service': 'did', 'highlight': 'moment', 'friend_made': 'social',
+             'phone': 'social', 'tie': 'social', 'tie_due': 'social', 'buddy': 'social', 'missed_you': 'social'}
+# 0.3.3（主人 11-17「怎么还是有人反应鱼看不到自己操作过程？」「所有用户都希望小镇发生的详细内容能进聊天」）：她自己做的事
+# （小镇替她办的事成没成、做好了的东西、旁听、请客出游）记成 'did'，小镇给的原话整段（主人 11-17「我要的是全部内容」：
+# 谁在旁边、会持续多久都留着），只去掉钱
+TO_HER = {'got', 'treat_got', 'gift_got'}          # service 里别人为她做的
+SKIP_ACTION = {'none', 'rest', ''}
+OWN_MAX = 600
 # 要她自己开口告诉主人的事（问主人同不同意、夸夸群的祝福到了）
 NEEDS_HER = {'heart_consent', 'heart_together', 'bless_ready'}
 MAX_DIALOGUE = 1200
@@ -84,6 +91,32 @@ def describe(item: dict) -> str | None:
         who = (d.get('from') or {}).get('name') if isinstance(d.get('from'), dict) else ''
         line = f"· {label}：{who + '给你发了消息：' if who else ''}{_short(d.get('text') or facts, 80)}{'（还约了见面）' if d.get('meet') else ''}"
     return line
+
+
+def _sentences(text: str, n: int = OWN_MAX) -> str:
+    t = re.sub(r'\s+', ' ', str(text or '')).strip(' ；;，,')
+    return t if len(t) <= n else t[:n] + '…'
+
+
+def own_line(kind: str, d: dict) -> str:
+    """她自己做的事 -> 一行；'' = 不用记。没办成写为什么，原因是钱就只写「没办成」（主人聊天里不提钱）。"""
+    d = d if isinstance(d, dict) else {}
+    if kind == 'outside_receipt':
+        action = str(d.get('action') or '').replace('plan:', '', 1)
+        reason = str(d.get('reason') or d.get('facts') or '')
+        if d.get('ok') is not False and action in SKIP_ACTION and not reason:
+            return ''
+        first = _sentences(no_money(reason))
+        if d.get('ok') is False:
+            return f'没办成：{first}' if first else '有一件事没办成'
+        return first
+    return _sentences(no_money(str(d.get('facts') or d.get('text') or '')))
+
+
+def own_tag(kind: str, d: dict) -> str:
+    if kind == 'service' and str((d or {}).get('what') or '') in TO_HER:
+        return 'social'
+    return FRESH_TAG.get(kind, '')
 
 
 def no_money(text: str) -> str:

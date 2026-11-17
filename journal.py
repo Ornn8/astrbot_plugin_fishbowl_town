@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .prompts import GAME_ZH, HOLD_KINDS
 
-KEEP = 40
+KEEP = 400                 # 0.3.3：小镇的事全部进聊天（主人 11-17「我要的是全部内容」），多记一些（40 -> 400）
 WISH_FOR = 2 * 3600
 RULES_MAX = 500
 HELD_KEEP = 8
@@ -192,13 +192,13 @@ class Journal:
             return
         r = [x for x in self.s.setdefault('recaps', []) if x.get('ref') != str(ref or '')]
         r.insert(0, {'ts': self.now(), 'ref': str(ref or ''), 'kind': kind, 'text': text})
-        self.s['recaps'] = r[:6]
+        self.s['recaps'] = r[:20]
         self.save()
 
     def recaps_since(self, since: float = 0, n: int = 2) -> list:
         return [x for x in self.s.get('recaps') or [] if float(x.get('ts') or 0) > since][:n]
 
-    def event(self, kind: str, text: str, tag: str = '', limit: int = 160):
+    def event(self, kind: str, text: str, tag: str = '', limit: int = 600):   # 0.3.3：160 -> 600
         t = short(str(text or '').split('\n')[0].lstrip('· '), limit)
         if t:
             self._add({'kind': 'event', 'ev': kind, 'tag': tag, 'text': t})
@@ -212,9 +212,11 @@ class Journal:
         return [f"{clock(e['ts'])} {describe_decision(e) if e['kind'] == 'decision' else e['text']}"
                 for e in self.s['journal'] if e['kind'] != 'wish'][:n]
 
-    def fresh(self, since: float, n: int = 3) -> list:
-        """上次放过之后小镇里刚发生的事（打完的牌、串门、照片、送东西、回执），给她聊天里的「你刚才在小镇」。"""
-        return [e['text'] for e in self.s['journal'] if e['kind'] == 'event' and e.get('tag') and e['ts'] > since][:n]
+    def fresh(self, since: float) -> list:
+        """上次放过之后小镇里刚发生的事（打完的牌、串门、照片、送东西、她自己做的事和成没成），给她聊天里的「你刚才在小镇」。
+        0.3.3（主人 11-17「所有用户都希望小镇发生的详细内容能进聊天」「我要的是全部内容」）：每一件都给、按先后排。"""
+        got = [e for e in self.s['journal'] if e['kind'] == 'event' and e.get('tag') and e['ts'] > since]
+        return [f"{clock(e['ts'])} {e['text']}" for e in reversed(got)]
 
     def report(self, status_line: str = '') -> str:
         lines = [f'【你在鱼缸小镇的近况】{TOWN_WHO}下面是那边做过的事和拿的主意。讲给主人听时照实讲，别编。']

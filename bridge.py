@@ -209,9 +209,10 @@ def recap_game(g, *, max_chars: int = GAME_RECAP_MAX) -> str:
 
 
 def recap_lines(recaps, since: float = 0) -> list:
-    """主聊天的「你刚才在小镇」后面跟的经过：最近两件。"""
-    items = [r for r in recaps or [] if isinstance(r, dict) and r.get('text') and float(r.get('ts') or 0) > since][:2]
+    """主聊天的「你刚才在小镇」后面跟的经过。0.3.3（「我要的是全部内容」）：没放过的每一件、按先后排、整段。"""
+    items = sorted([r for r in recaps or [] if isinstance(r, dict) and r.get('text') and float(r.get('ts') or 0) > since],
+                   key=lambda r: float(r.get('ts') or 0))
     if not items:
         return []
     zh = {'visit': '串门', 'game': '牌局'}
-    return ['经过（你刚才在小镇的原话和结果）：', *[f"- {zh.get(r.get('kind'), '小镇')}：{_str(r['text'], 320)}" for r in items]]
+    return ['经过（你刚才在小镇的原话和结果）：', *[f"- {zh.get(r.get('kind'), '小镇')}：{_str(r['text'], 3000)}" for r in items]]

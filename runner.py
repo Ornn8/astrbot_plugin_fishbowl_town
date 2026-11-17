@@ -304,6 +304,16 @@ class Runner:
             if table:
                 it = {**it, 'data': {**d, 'facts': re.sub(r'[。.]\s*$', '', str(d.get('facts') or d.get('summary') or '')) + table['note']}}
             line = ev.describe(it)
+            if kind in ('outside_receipt', 'service') and d is not None:
+                own = ev.own_line(kind, d)               # 0.3.3：她自己做的事，一行她看得懂的话
+                if own:
+                    j.event(kind, own, ev.own_tag(kind, d))
+                    if kind == 'service' and self.brief:
+                        try:
+                            self.brief(own)                  # 小镇简报照旧有这件（回执本来就不进简报）
+                        except Exception:  # noqa: BLE001
+                            pass
+                    line = None
             if line and kind not in ev.QUIET:
                 tag = ev.FRESH_TAG.get(kind, '')
                 j.event(kind, ev.no_money(line) if tag else line, tag)
