@@ -5,15 +5,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.provider import ProviderRequest
+from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
 from . import render, updater
 from .bridge import life_from_history, scrub_life
+from .chat_decide import ASK_SHORT, ChatDecide, plain_reply
 from .chat_home import ChatHome
 from .context_note import TownNote
 from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
@@ -26,7 +28,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.3.3'
+VERSION = '0.4.0'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -40,7 +42,9 @@ class FishbowlTown(Star):
         self.journal = Journal(StarTools.get_data_dir(PLUGIN) / 'town.json')
         self.client: TownClient | None = None
         self.runner: Runner | None = None
-        self.note = TownNote(fetch_bonds=self._bonds, fetch_now=self._now_line, journal=self.journal, log=logger, recap=self._recap_on)
+        # 0.4.0「主聊天拿主意」：去哪、做什么由私聊里的她定（chat_decide.py）
+        self.decide = ChatDecide(self.journal, ask_main=self._ask_main, home_umo=self.owner_umo, idle_s=self._owner_idle_s, config=self.config, log=logger)
+        self.note = TownNote(fetch_bonds=self._bonds, fetch_now=self._now_line, journal=self.journal, log=logger, recap=self._recap_on, decide=self.decide)
         self._her_name = ''
         self.home = ChatHome(self.journal.s.setdefault('home', {}), save=self.journal.save)
         self._brief: list[str] = []
@@ -62,7 +66,7 @@ class FishbowlTown(Star):
             return
         self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify, brief=self._brief_line,
                              quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger,
-                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on)
+                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
         try:
@@ -165,6 +169,38 @@ class FishbowlTown(Star):
         """小镇的一步：用她的人设和模型答，不进主人的聊天记录。"""
         resp = await self.context.llm_generate(chat_provider_id=await self._provider_id(), prompt=prompt, system_prompt=await self._persona_prompt())
         return str(resp.completion_text or '')
+
+    def _owner_idle_s(self) -> float:
+        umo = self.owner_umo()
+        return time.time() - self.home.last_said(umo) if umo else float('inf')
+
+    async def _ask_main(self, prompt: str) -> str | None:
+        """0.4.0：在主人私聊里问她（带你们这段对话的记录，用她的人设和模型）：她的回答发给主人，问答一起记进这段对话，下次聊天她记得。"""
+        umo = self.owner_umo()
+        if not umo:
+            return None
+        cm = self.context.conversation_manager
+        cid = await cm.get_curr_conversation_id(umo)
+        conv = await cm.get_conversation(umo, cid) if cid else None
+        contexts = []
+        if conv is not None:
+            try:
+                h = conv.history if isinstance(conv.history, list) else json.loads(conv.history or '[]')
+                contexts = [m for m in h if isinstance(m, dict) and m.get('role') in ('user', 'assistant') and isinstance(m.get('content'), (str, list))][-40:]
+            except (TypeError, ValueError):
+                contexts = []
+        resp = await self.context.llm_generate(chat_provider_id=await self._provider_id(), prompt=prompt, system_prompt=await self._persona_prompt(), contexts=contexts)
+        text = str(resp.completion_text or '').strip()
+        if not text:
+            return None
+        shown = plain_reply(text)
+        await self.context.send_message(umo, MessageChain().message(shown))
+        if cid:
+            try:
+                await cm.add_message_pair(cid, {'role': 'user', 'content': ASK_SHORT}, {'role': 'assistant', 'content': shown})
+            except Exception as error:  # noqa: BLE001 - 记不进对话也不影响这次
+                logger.debug(f'[鱼缸小镇] 问答没记进对话：{error!r}')
+        return text
 
     async def _tell(self, prompt: str):
         """要她开口的事（问主人同不同意、夸夸群的祝福到了）：她用自己的口吻说一句，发到主人的私聊。"""
@@ -291,6 +327,15 @@ class FishbowlTown(Star):
             return
         if text:
             req.extra_user_content_parts.append(TextPart(text=text) if TextPart else {'type': 'text', 'text': text})
+
+    @filter.on_llm_response()
+    async def town_decide_reply(self, event: AstrMessageEvent, resp: LLMResponse):
+        """0.4.0：主人这句话的背景里附了「小镇在等你定」：读她这一轮回复里的「小镇打算」。"""
+        try:
+            if self.decide.watching(event.unified_msg_origin):
+                self.decide.replied(event.unified_msg_origin, str(getattr(resp, 'completion_text', '') or ''))
+        except Exception as error:  # noqa: BLE001 - never in the way of her reply
+            logger.debug(f'[鱼缸小镇] 读她的小镇打算出错：{error!r}')
 
     # --- 主人的命令 -----------------------------------------------------------------------------------------------------
     @filter.command_group('town')

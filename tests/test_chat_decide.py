@@ -1,0 +1,203 @@
+"""0.4.0「主聊天拿主意」（主人 11-18「太割裂了」→「新的作为首选」；和 DSH 0.9.0 test/chat-decide.test.mjs 同一套用例）。"""
+import asyncio
+import json
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parent))
+
+from astrbot_plugin_fishbowl_town.chat_decide import (NOTE_ASKING, NOTE_WAITING, PLAN_MARK, ChatDecide, build_ask,  # noqa: E402
+                                                      plan_of)
+from astrbot_plugin_fishbowl_town.context_note import TownNote  # noqa: E402
+from astrbot_plugin_fishbowl_town.journal import Journal  # noqa: E402
+from astrbot_plugin_fishbowl_town.prompts import build_turn_prompt  # noqa: E402
+from astrbot_plugin_fishbowl_town.runner import Runner  # noqa: E402
+
+
+def agency(tid, reasons=('idle',)):
+    return {'turn_id': tid, 'kind': 'agency', 'deadline': time.time() + 25,
+            'packet': {'purpose': 'agency', 'reasons': list(reasons), 'reply': {'format': 'json', 'hint': '{"action":"none"}', 'max_chars': 400},
+                       'messages': [{'role': 'system', 'content': '拿主意的规则'}, {'role': 'user', 'content': '码头上有人在泡水；麦香面包房在烤面包。'}]}}
+
+
+def world(tmp_path, *, idle=600, reply=f'好呀\n{PLAN_MARK}去码头泡一会儿', umo='qq:FriendMessage:1', clock=None):
+    clock = clock or [1_800_000_000.0]
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    j = Journal(tmp_path / 'j.json', now=lambda: clock[0])
+    asked = []
+
+    async def ask_main(text):
+        asked.append(text)
+        return reply() if callable(reply) else reply
+    cfg = {}
+    idle_box = [idle]
+    d = ChatDecide(j, ask_main=ask_main, home_umo=lambda: umo, idle_s=lambda: idle_box[0], config=cfg, now=lambda: clock[0])
+    return d, j, asked, cfg, clock, idle_box
+
+
+def test_plan_line_and_ask_text():
+    assert plan_of(f'嗯嗯\n{PLAN_MARK}报名打一局斗地主。') == '报名打一局斗地主'
+    assert plan_of('今天不想动') is None
+    ask = build_ask(agency('x'))
+    assert '插件发的，不是主人说的话' in ask and '码头上有人在泡水' in ask and '【小镇打算】' in ask
+
+
+def test_routes(tmp_path):
+    d, j, *_ = world(tmp_path)
+    j.wish('去码头泡一会儿', own=True)
+    assert d.route(agency('c1')) == {'role': 'execute'}
+    d2, *_ = world(tmp_path / 'b')
+    assert d2.route(agency('c2', ['invited'])) == {'role': 'rules'}
+    d3, *_ = world(tmp_path / 'c', idle=20)
+    assert d3.route(agency('c3', ['pulled', 'table']))['answer']           # the plugin's own start pull is not the town's to decide any more
+    d4, _, _, cfg4, *_ = world(tmp_path / 'd')
+    cfg4['decide_in_chat'] = False
+    assert d4.route(agency('c4')) is None
+    d5, *_ = world(tmp_path / 'e', umo='')
+    assert d5.route(agency('c5')) is None
+
+
+def test_away_ask_wait_and_fallback(tmp_path):
+    d, j, asked, cfg, clock, _ = world(tmp_path / 'x', reply='嗯')
+
+    async def go():
+        a1 = json.loads(d.route(agency('d1'))['answer'])
+        assert a1 == {'action': 'none', 'next_wake': 8, 'note': NOTE_ASKING}
+        await d._task
+        assert j.s['decide_miss'] == 1
+        clock[0] += 30 * 60
+        w = json.loads(d.route(agency('d2'))['answer'])
+        assert w['note'] == NOTE_WAITING and w['next_wake'] == 90
+        clock[0] += 91 * 60
+        d.route(agency('d3'))
+        await d._task
+        assert len(asked) == 2 and j.s['decide_miss'] == 2
+        assert d.route(agency('d4')) == {'role': 'fallback'}
+        d.after('fallback', {'action': 'pier', 'note': '想去晒太阳'})
+        assert any('两次没顾上回，这次小镇那边先替你定了：去码头（想去晒太阳）' in e['text'] for e in j.s['journal'])
+        assert j.fresh(0) and '先替你定了' in j.fresh(0)[-1]                 # reaches her chat note
+    asyncio.run(go())
+
+
+def test_he_is_talking_rides_on_his_words(tmp_path):
+    d, j, asked, cfg, clock, idle = world(tmp_path, idle=20)
+    umo = 'qq:FriendMessage:1'
+    a = json.loads(d.route(agency('e1'))['answer'])
+    assert a['next_wake'] == 5
+    assert d.pending_note('other') == ''
+    note = d.pending_note(umo)
+    assert '【小镇在等你定】' in note and '先好好回他的话' in note and '码头上有人在泡水' in note
+    d.note_sent(umo)
+    assert d.pending_note(umo) == '' and d.watching(umo)
+    assert json.loads(d.route(agency('e2'))['answer'])['note'] == NOTE_ASKING
+    d.replied(umo, f'哈哈好呀，晚点聊～\n{PLAN_MARK}去找阿鲸串门')
+    assert j.pending_wish() == '去找阿鲸串门' and j.wish_is_own()
+    assert not asked, 'no extra call while he is talking'
+
+
+def test_town_note_appends_the_waiting_ask(tmp_path):
+    class D:
+        sent = []
+
+        def pending_note(self, key):
+            return '' if self.sent else '【小镇在等你定】测试'
+
+        def note_sent(self, key):
+            self.sent.append(key)
+
+    async def bonds():
+        return {'ok': True}
+
+    async def now_line():
+        return ''
+    j = Journal(tmp_path / 'j.json')
+    note = TownNote(fetch_bonds=bonds, fetch_now=now_line, journal=j, decide=D())
+    out = asyncio.run(note.for_turn('k'))
+    assert '【小镇在等你定】测试' in out and out.startswith('【鱼缸小镇插件')
+
+
+def test_prompts():
+    ex = build_turn_prompt(agency('p1'), wish='先去码头，晚上八点报名斗地主', wish_own=True, role='execute')
+    assert '照你在聊天里定的去做' in ex and '不要换成别的事' in ex and '办不了：原因' in ex and 'plan.steps' in ex
+    ru = build_turn_prompt(agency('p2', ['invited']), role='rules', rules={'text': '朋友约我都去', 'hold': []})
+    assert '有件事要马上回' in ru and '只答眼前这件事' in ru and '朋友约我都去' in ru
+    plain = build_turn_prompt(agency('p3'))
+    assert '该你自己拿主意了' in plain and '照你在聊天里定的' not in plain
+
+
+def test_runner_executes_her_plan_and_marks_it(tmp_path):
+    d, j, *_ = world(tmp_path)
+    j.wish('去码头泡一会儿', own=True)
+
+    class Client:
+        posted = []
+
+        async def answer(self, tid, body):
+            self.posted.append((tid, body))
+            return {'ok': True}
+
+    prompts = []
+
+    async def ask(prompt):
+        prompts.append(prompt)
+        return json.dumps({'action': 'pier', 'note': '晒太阳', 'plan': {'hours': 1, 'doing': '码头泡着'}}, ensure_ascii=False)
+    c = Client()
+    r = Runner(c, j, ask, decide=d)
+    r.running = True
+    asyncio.run(r.handle(agency('ot_9'), time.time()))
+    assert '照你在聊天里定的去做' in prompts[0]
+    body = json.loads(c.posted[0][1])
+    assert body['action'] == 'pier' and body['note'] == '照你在聊天里定的：晒太阳'
+    assert j.pending_wish() == ''
+
+
+def test_runner_answers_the_town_without_calling_the_model_while_waiting(tmp_path):
+    d, j, *_ = world(tmp_path, idle=20)
+
+    class Client:
+        posted = []
+
+        async def answer(self, tid, body):
+            self.posted.append((tid, body))
+            return {'ok': True}
+
+    async def ask(prompt):
+        raise AssertionError('the town-side ask must not run')
+    c = Client()
+    r = Runner(c, j, ask, decide=d)
+    r.running = True
+    asyncio.run(r.handle(agency('ot_1', ['table']), time.time()))       # tables waiting: something to decide
+    assert json.loads(c.posted[0][1])['note'] == NOTE_ASKING
+
+
+def test_history_keeps_no_copyable_plan_line():
+    from astrbot_plugin_fishbowl_town.chat_decide import ASK_SHORT, plain_reply
+    assert plain_reply(f'还是歇着吧。\n{PLAN_MARK}歇着。') == '还是歇着吧。\n（小镇打算：歇着）'
+    assert plan_of(plain_reply(f'好\n{PLAN_MARK}去码头')) is None              # the stored line is never read as a new plan
+    assert ASK_SHORT.startswith('【鱼缸小镇插件') and PLAN_MARK not in ASK_SHORT
+
+
+def test_decided_line_reads_naturally():
+    from astrbot_plugin_fishbowl_town.chat_decide import decided_line
+    v = decided_line('rules', {'action': 'visit', 'game': 'ddz', 'target': '阿鲸', 'place': '码头', 'note': '说好来的'})
+    assert '去码头找阿鲸串门（说好来的）' in v and 'ddz' not in v
+    assert '报名一桌（ddz）' in decided_line('fallback', {'action': 'signup', 'game': 'ddz'})
+
+
+def test_a_tool_step_without_the_line_keeps_waiting(tmp_path):
+    d, j, asked, cfg, clock, idle = world(tmp_path, idle=20)
+    umo = 'qq:FriendMessage:1'
+    d.route(agency('t1'))
+    d.note_sent(umo)
+    d.replied(umo, '我查一下天气')                           # first LLM response of the turn: a tool call, no plan line
+    assert d.watching(umo) and j.s.get('decide_miss', 0) == 0
+    d.replied(umo, f'晴天！\n{PLAN_MARK}去码头晒太阳')
+    assert j.pending_wish() == '去码头晒太阳'
+    assert d.route(agency('t2')) == {'role': 'execute'}
+    d2, j2, _, _, clock2, _ = world(tmp_path / 'b', idle=20)
+    d2.route(agency('t3'))
+    d2.note_sent(umo)
+    clock2[0] += 11 * 60
+    assert not d2.watching(umo) and j2.s['decide_miss'] == 1   # never wrote the line: one miss after REPLY_WAIT_S

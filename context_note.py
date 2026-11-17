@@ -77,8 +77,9 @@ def render_fresh(fresh=(), now_line: str = '', recaps=()) -> str:
 
 
 class TownNote:
-    def __init__(self, *, fetch_bonds, fetch_now, journal, now=time.time, log=None, recap=lambda: True):
+    def __init__(self, *, fetch_bonds, fetch_now, journal, now=time.time, log=None, recap=lambda: True, decide=None):
         self.fetch_bonds, self.fetch_now, self.journal, self.now, self.log = fetch_bonds, fetch_now, journal, now, log
+        self.decide = decide       # 0.4.0：小镇在等她拿主意时附在他这句话后面（chat_decide.py）
         self.recap_on = recap
         self.cache = None          # (at, bonds)
         self.now_cache = None      # (at, line)
@@ -119,7 +120,15 @@ class TownNote:
         return self.journal.recaps_since(since, RECAPS)
 
     async def for_turn(self, key: str) -> str:
-        """主人这一句要不要附上、附什么：'' = 不附。"""
+        """主人这一句要不要附上、附什么：'' = 不附。0.4.0：小镇在等她拿主意（chat_decide 的 pending_note）就附在后面，她回他时顺手定。"""
+        out = await self._for_turn(key)
+        ask = self.decide.pending_note(key) if self.decide else ''
+        if not ask:
+            return out
+        self.decide.note_sent(key)
+        return f'{out}\n{ask}' if out else f'{HEAD}\n{ask}'
+
+    async def _for_turn(self, key: str) -> str:
         prev = self.owner_at.get(key)
         self.owner_at[key] = self.now()
         back = prev is None or self.now() - prev >= RETURN_GAP

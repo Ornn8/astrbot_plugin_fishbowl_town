@@ -9,6 +9,7 @@ import re
 import time
 
 from . import events as ev
+from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
 from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
@@ -29,8 +30,9 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 class Runner:
     def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time,
-                 owner_life=None, on_echo=None, recap=lambda: True):
+                 owner_life=None, on_echo=None, recap=lambda: True, decide=None):
         self.client, self.journal, self.ask = client, journal, ask
+        self.decide = decide          # 0.4.0「主聊天拿主意」（chat_decide.ChatDecide）
         self.tell, self.notify, self.brief = tell, notify, brief
         self.quiet, self.her_name = quiet, her_name
         self.owner_life, self.on_echo, self.recap_on = owner_life, on_echo, recap   # 0.3.0 两边是同一个她
@@ -72,10 +74,18 @@ class Runner:
                     await self._post(tid, json.dumps({'action': 'none', 'next_wake': s['minutes']}), turn, received)
                     self.log.info(f"拿主意的回合 {tid} 没叫她（{s['why']}）")
                     return
+            # 0.4.0：主意由聊天里的她定（chat_decide.py）；这里只照着办 / 急事先答 / 两次没回先替她定，其余插件直接回小镇「过一会儿再叫我」
+            route = self.decide.route(turn) if kind == 'agency' and self.decide else None
+            if route and route.get('answer'):
+                await self._post(tid, route['answer'], turn, received)
+                self.stats['chat_decide'] = self.stats.get('chat_decide', 0) + 1
+                self.log.info(f'拿主意的回合 {tid}：等聊天里的她定，小镇那边先等一会儿')
+                return
+            role = (route or {}).get('role', '')
             rules = {'text': j.rules(), 'hold': j.holds()}
             mind = {'rules': rules}
             if kind == 'agency':
-                mind.update(recent=j.recent_for_agency(), wish=j.pending_wish(), wish_own=j.wish_is_own())
+                mind.update(recent=j.recent_for_agency(), wish=j.pending_wish(), wish_own=j.wish_is_own(), role=role)
             if kind == 'visit':
                 plan = (j.pending_wish() if j.wish_is_own() else '') or j.doing()
                 if plan:
@@ -155,12 +165,20 @@ class Runner:
             if kind == 'agency':
                 try:
                     decided = j.settle(json.loads(answer), self.quiet())
+                    # 0.4.0：照她在聊天里定的办的，note 标一下（小镇那边数得出；主人在「战绩」里看得到）
+                    if role == 'execute' and isinstance(decided, dict) and not str(decided.get('note') or '').startswith('办不了'):
+                        decided['note'] = (NOTE_EXECUTED + ('：' + str(decided['note']) if decided.get('note') else ''))[:200]
                     answer = json.dumps(decided, ensure_ascii=False)
                 except ValueError:
                     decided = None
             await self._post(tid, answer, turn, received)
             if decided:
                 j.decision(decided)
+                if role and self.decide:
+                    try:
+                        self.decide.after(role, decided)
+                    except Exception:  # noqa: BLE001 - 只是记一笔
+                        pass
             if kind == 'game':   # 牌桌上这一手记进本子，那局打完时连同结果给聊天里的她
                 try:
                     a = json.loads(answer)
