@@ -15,7 +15,7 @@ from astrbot.api.star import Context, Star, StarTools
 
 from . import render, updater
 from .bridge import life_from_history, scrub_life
-from .chat_decide import ASK_SHORT, ChatDecide, plain_reply
+from .chat_decide import PLAN_MARK, ChatDecide, strip_plan
 from .chat_home import ChatHome
 from .context_note import TownNote
 from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
@@ -28,7 +28,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.0'
+VERSION = '0.4.1'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -175,7 +175,9 @@ class FishbowlTown(Star):
         return time.time() - self.home.last_said(umo) if umo else float('inf')
 
     async def _ask_main(self, prompt: str) -> str | None:
-        """0.4.0：在主人私聊里问她（带你们这段对话的记录，用她的人设和模型）：她的回答发给主人，问答一起记进这段对话，下次聊天她记得。"""
+        """主人不在时问她小镇接下来做什么：带你们这段对话的记录，用她的人设和模型。
+        0.4.1（主人 11-19「这玩意在对话里逐条报影响用户体验」）：只是她自己想一下，不发给主人、不记进对话；
+        她定的事记在插件本子里（「你定了小镇的打算」），办成没办成在他下一句话的背景里告诉她。"""
         umo = self.owner_umo()
         if not umo:
             return None
@@ -191,16 +193,7 @@ class FishbowlTown(Star):
                 contexts = []
         resp = await self.context.llm_generate(chat_provider_id=await self._provider_id(), prompt=prompt, system_prompt=await self._persona_prompt(), contexts=contexts)
         text = str(resp.completion_text or '').strip()
-        if not text:
-            return None
-        shown = plain_reply(text)
-        await self.context.send_message(umo, MessageChain().message(shown))
-        if cid:
-            try:
-                await cm.add_message_pair(cid, {'role': 'user', 'content': ASK_SHORT}, {'role': 'assistant', 'content': shown})
-            except Exception as error:  # noqa: BLE001 - 记不进对话也不影响这次
-                logger.debug(f'[鱼缸小镇] 问答没记进对话：{error!r}')
-        return text
+        return text or None
 
     async def _tell(self, prompt: str):
         """要她开口的事（问主人同不同意、夸夸群的祝福到了）：她用自己的口吻说一句，发到主人的私聊。"""
@@ -336,6 +329,35 @@ class FishbowlTown(Star):
                 self.decide.replied(event.unified_msg_origin, str(getattr(resp, 'completion_text', '') or ''))
         except Exception as error:  # noqa: BLE001 - never in the way of her reply
             logger.debug(f'[鱼缸小镇] 读她的小镇打算出错：{error!r}')
+        try:   # 0.4.1：读完就把那行收走（记进对话的也不留，平时聊天她不跟着写）
+            if self._is_owner_chat(event) and PLAN_MARK in str(getattr(resp, 'completion_text', '') or ''):
+                resp.completion_text = strip_plan(resp.completion_text)
+        except Exception as error:  # noqa: BLE001
+            logger.debug(f'[鱼缸小镇] 收走小镇打算那行出错：{error!r}')
+
+    @filter.on_decorating_result()
+    async def town_plan_hidden(self, event: AstrMessageEvent):
+        """0.4.1（主人 11-19「这玩意在对话里逐条报影响用户体验」）：发给主人之前，「【小镇打算】…」那行收走（分段回复会把它单独发成一条）。"""
+        try:
+            if not self._is_owner_chat(event):
+                return
+            result = event.get_result()
+            chain = getattr(result, 'chain', None) if result else None
+            if not chain:
+                return
+            kept = []
+            for part in chain:
+                text = getattr(part, 'text', None)
+                if isinstance(text, str) and ('小镇打算' in text):
+                    text = strip_plan(text)
+                    if not text:
+                        continue
+                    part.text = text
+                kept.append(part)
+            if len(kept) != len(chain) or any(p is not q for p, q in zip(kept, chain)):
+                result.chain = kept
+        except Exception as error:  # noqa: BLE001 - never in the way of her reply
+            logger.debug(f'[鱼缸小镇] 收走小镇打算那行出错：{error!r}')
 
     # --- 主人的命令 -----------------------------------------------------------------------------------------------------
     @filter.command_group('town')

@@ -213,8 +213,8 @@ def build_turn_prompt(turn: dict, *, seconds_left: int = 0, recent=(), wish: str
 
 # 0.4.0「主聊天拿主意」（chat_decide.py）：主意由聊天里的她定，这边按角色答——execute 照她定的打算办；rules 急事按她的规矩先答；fallback 她两次没顾上回，先替她定
 ROLE_HEAD = {
-    'execute': ('【鱼缸小镇 · 该你自己拿主意了 · 照你在聊天里定的去做】',
-                '你在聊天里已经跟主人说了接下来的打算（下面「你刚才在聊天里跟主人说你想」）。这一步只把它落成小镇的动作：能马上做的写成 action；'
+    'execute': ('【鱼缸小镇 · 该你自己拿主意了 · 照你定的去做】',
+                '你已经定好了接下来的打算（下面「你自己定的打算」）。这一步只把它落成小镇的动作：能马上做的写成 action；'
                 '有先后、有时间的写进 plan.steps（[{"in_minutes": 几分钟后, "do": "signup", "game": "游戏"} 或 {"in_minutes": N, "do": "visit", "target": "fish_id", "place": "home", "intent": "找她干嘛"} '
                 '或 {"in_minutes": N, "do": "pier" / "arcade" / "rest"}]，到点小镇替你去办）；plan.hours 设成这个打算做完的时候。'
                 '不要换成别的事，也不要另加没说过的安排（请客、送礼、答应约定都不加）。现在真办不了（关门、没这个、这会儿去不了），action 填 none，note 写「办不了：原因」，聊天里的你会知道。'),
@@ -247,7 +247,7 @@ def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, f
         *(['【你最近在小镇（这边自己的决定和经历，新的在前）】', *recent, ''] if recent else []),
         *life_block(life, deciding=True),
         *rules_block(rules),
-        *(['【你刚才在聊天里跟主人说你想】', f'「{wish}」——这是你自己说的打算，现在就照着去做（小镇里能做的就选对应的 action，比如烤面包、种菜是 make；几件事、带时间的写进 plan.steps）。'
+        *(['【你自己定的打算】', f'「{wish}」——这是你自己定的打算，现在就照着去做（小镇里能做的就选对应的 action，比如烤面包、种菜是 make；几件事、带时间的写进 plan.steps）。'
            if role == 'execute' else f'「{wish}」——这是你自己说的打算，现在就照着去做（小镇里能做的就选对应的 action，比如烤面包、种菜是 make）；眼下真有更想做的也行，在 note 里说一声。', '']
           if wish and wish_own else []),
         *(['【主人刚才在聊天里跟你说】', f'「{wish}」——他想让你这样；去不去、怎么去还是你自己拿主意，想去就照着做，不想去就在 note 里说说为什么。', '']

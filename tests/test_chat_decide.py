@@ -120,7 +120,7 @@ def test_town_note_appends_the_waiting_ask(tmp_path):
 
 def test_prompts():
     ex = build_turn_prompt(agency('p1'), wish='先去码头，晚上八点报名斗地主', wish_own=True, role='execute')
-    assert '照你在聊天里定的去做' in ex and '不要换成别的事' in ex and '办不了：原因' in ex and 'plan.steps' in ex
+    assert '照你定的去做' in ex and '不要换成别的事' in ex and '办不了：原因' in ex and 'plan.steps' in ex
     ru = build_turn_prompt(agency('p2', ['invited']), role='rules', rules={'text': '朋友约我都去', 'hold': []})
     assert '有件事要马上回' in ru and '只答眼前这件事' in ru and '朋友约我都去' in ru
     plain = build_turn_prompt(agency('p3'))
@@ -147,7 +147,7 @@ def test_runner_executes_her_plan_and_marks_it(tmp_path):
     r = Runner(c, j, ask, decide=d)
     r.running = True
     asyncio.run(r.handle(agency('ot_9'), time.time()))
-    assert '照你在聊天里定的去做' in prompts[0]
+    assert '照你定的去做' in prompts[0]
     body = json.loads(c.posted[0][1])
     assert body['action'] == 'pier' and body['note'] == '照你在聊天里定的：晒太阳'
     assert j.pending_wish() == ''
@@ -201,3 +201,22 @@ def test_a_tool_step_without_the_line_keeps_waiting(tmp_path):
     d2.note_sent(umo)
     clock2[0] += 11 * 60
     assert not d2.watching(umo) and j2.s['decide_miss'] == 1   # never wrote the line: one miss after REPLY_WAIT_S
+
+
+def test_her_reply_to_him_loses_the_plan_line():
+    """0.4.1 (owner 11-19 「这玩意在对话里逐条报影响用户体验」): the line is read, then taken out before he sees her reply."""
+    from astrbot_plugin_fishbowl_town.chat_decide import strip_plan
+    assert strip_plan(f'好呀，我去码头啦~\n{PLAN_MARK}先去码头泡一会儿，晚上八点报名斗地主') == '好呀，我去码头啦~'
+    assert strip_plan(f'{PLAN_MARK}歇着') == ''
+    assert strip_plan(f'嗯\n（小镇打算：歇着）\n晚安') == '嗯\n晚安'
+    assert strip_plan(f'我在呢\n\n{PLAN_MARK}：去电玩城打地鼠。\n\n你吃饭没') == '我在呢\n\n你吃饭没'
+    assert strip_plan('平常一句话，说到小镇的打算也不动') == '平常一句话，说到小镇的打算也不动'
+
+
+def test_the_away_ask_is_her_own_think_and_says_so(tmp_path):
+    from astrbot_plugin_fishbowl_town.chat_decide import build_ask
+    text = build_ask(agency('t1'))
+    assert '不发给他' in text and '一两句说说' not in text
+    d, j, asked, cfg, clock, idle = world(tmp_path, idle=10_000)
+    asyncio.run(d._ask(agency('t1')))
+    assert j.pending_wish() == '去码头泡一会儿' and '你定了小镇的打算' in json.dumps(j.s, ensure_ascii=False)
