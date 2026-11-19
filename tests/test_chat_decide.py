@@ -220,3 +220,12 @@ def test_the_away_ask_is_her_own_think_and_says_so(tmp_path):
     d, j, asked, cfg, clock, idle = world(tmp_path, idle=10_000)
     asyncio.run(d._ask(agency('t1')))
     assert j.pending_wish() == '去码头泡一会儿' and '你定了小镇的打算' in json.dumps(j.s, ensure_ascii=False)
+
+
+def test_visit_target_is_a_real_id_or_her_name_never_the_placeholder():
+    """11-19 小馋鱼: {"target": "fish_id"} copied from the execute example -> 「目标不对」."""
+    from astrbot_plugin_fishbowl_town.prompts import build_turn_prompt
+    for role in ('execute', ''):
+        text = build_turn_prompt(agency('v1'), wish='去找鱼圆串门', wish_own=True, role=role)
+        assert '"target": "fish_id"' not in text
+        assert '名单里没有的鱼，直接写她的名字' in text
