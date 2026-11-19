@@ -18,6 +18,7 @@ from .bridge import life_from_history, scrub_life
 from .chat_decide import PLAN_MARK, ChatDecide, strip_plan
 from .chat_home import ChatHome
 from .context_note import TownNote
+from .guide import guide_text
 from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
 from .prompts import HOLD_KINDS, SILENT
 from .runner import Runner
@@ -28,7 +29,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.1'
+VERSION = '0.4.2'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -69,6 +70,11 @@ class FishbowlTown(Star):
                              owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
+        # 0.4.2 新手引导：已经在小镇过过日子的（本子里有事）是老用户，更新到这一版不再推；新住进来的，认好私聊就发一次
+        if not self.journal.s.get('guide_told') and self.journal.s.get('journal'):
+            self.journal.s['guide_told'] = 'old'
+            self.journal.save()
+        asyncio.create_task(self._maybe_guide())
         try:
             st = await self.client.status()
             self._her_name = str((st or {}).get('name') or (st or {}).get('town_name') or '')
@@ -269,6 +275,19 @@ class FishbowlTown(Star):
         self.config.save_config()
         self.journal.s.setdefault('home', {})['how'] = how
         self.journal.save()
+        if how != 'manual':                         # (/town bind 的回复里自己带着引导)
+            asyncio.create_task(self._maybe_guide())
+
+    async def _maybe_guide(self):
+        """0.4.2 第一次住进小镇：值班了、认好了主人的私聊，就在那里发一次新手引导（插件的话，不调她的模型）。"""
+        if self.journal.s.get('guide_told') or not self.client or not self.owner_umo():
+            return
+        self.journal.s['guide_told'] = time.time()
+        self.journal.save()
+        try:
+            await self._notify('她住进鱼缸小镇了。\n' + guide_text())
+        except Exception as error:  # noqa: BLE001 - a missed guide, never the plugin
+            logger.warning(f'[鱼缸小镇] 新手引导没发出去：{error}')
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE)
     async def watch_owner(self, event: AstrMessageEvent):
@@ -369,7 +388,17 @@ class FishbowlTown(Star):
     async def town_bind(self, event: AstrMessageEvent):
         """把现在这个聊天认作「主人和她的私聊」：小镇近况附在这里，她的消息发到这里。"""
         self._set_home(event.unified_msg_origin, 'manual')
-        yield event.plain_result('好了：这个聊天就是你和她的私聊。小镇近况会附在这里，小镇要问你的事（比如她和谁在一起）也发到这里。')
+        text = '好了：这个聊天就是你和她的私聊。小镇近况会附在这里，小镇要问你的事（比如她和谁在一起）也发到这里。'
+        if not self.journal.s.get('guide_told'):         # 0.4.2 第一次：引导跟在后面
+            self.journal.s['guide_told'] = time.time()
+            self.journal.save()
+            text += '\n\n' + guide_text()
+        yield event.plain_result(text)
+
+    @town.command('help')
+    async def town_help(self, event: AstrMessageEvent):
+        """新手引导：她在小镇怎么过、你能做什么"""
+        yield event.plain_result(guide_text())
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @town.command('update')
