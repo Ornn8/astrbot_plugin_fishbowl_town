@@ -6,6 +6,6 @@ def test_guide_text_is_title_then_numbered_steps():
     lines = guide_text().split('\n')
     assert lines[0] == GUIDE_TITLE
     assert len(lines) == len(GUIDE_STEPS) + 1
-    assert lines[1].startswith('1. 她自己过日子：')
-    assert '/town help' in guide_text() and '去小镇开一局狼人杀' in guide_text()
+    assert lines[1].startswith('1. 这座岛，大家一起建：')        # 主人 11-19：这一版先讲一起建岛
+    assert '/town help' in guide_text() and '加一种新玩法' in guide_text() and '去鱼缸岛承包' in guide_text()
     assert 'DSH' not in guide_text()          # AstrBot 的说法，不抄 DSH 的
