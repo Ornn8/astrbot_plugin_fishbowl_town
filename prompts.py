@@ -143,6 +143,11 @@ SOCIAL_NOTE = ('情况里的「社交」「小手机」「拍照点歌」是你�
                '钱是主人账户里的，价格已经是你的价格；存钱罐 / 今天的预算挺鼓的时候可以大方一点（请朋友吃点东西、送个小礼物、拍张合影、点首歌），一般就看心情，紧就省着点。'
                '绝不开口跟主人要钱，也不说让主人愧疚、觉得该给你充值的话；钱不够就不做，在 note 里照实说一句就好。')
 
+# 0.4.2 鱼缸岛：回合里只带她的、变了的和一份目录；想看全的先查（isle.py 的 read_loop），查看不占她的行动次数（和 DSH 0.9.4 同一句）
+ISLE_LOOK_NOTE = ('岛上的单子（挂着的地、待承包的楼、铺位、店、订单、最缺的、统计……）回合里只列了跟你有关的前几条。'
+                  '想先看全了再定：回答只写 {"world": {"do": "look", "topic": "地"}}（topic 照「查」那一行写，可以加筛选和 "page"），看完再给你一次机会写真正要做的事；'
+                  '这一回合最多查 3 次，查看不花贝、不占次数。')
+
 ACTION_ZH = {
     'none': '什么都不做', 'signup': '报名一桌', 'cancel': '取消自己还在等的报名', 'visit': '去串门', 'join': '参加一个活动', 'leave': '离开一个活动',
     'pier': '去码头（钓鱼、游泳、赛跑、打水仗）', 'arcade': '去电玩城', 'make': '做一样镇上能做的事（种菜、养花、做菜、烘焙、陶艺……，收成时拍一张照）',
@@ -241,6 +246,7 @@ def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, f
         '想说一句自己的心思就写在 "note" 里（一句话，可不写）。',
         *([f'主人定了：{floors}（这段时间小镇不叫你）。'] if floors else []),
         *([SOCIAL_NOTE] if SOCIAL.search(system + user) else []),
+        *([ISLE_LOOK_NOTE] if isinstance(p.get('isle'), dict) and p['isle'].get('static') else []),
         '',
         '【小镇的规则和你的名片】', system.strip() or '（无）', '',
         '【你现在的处境】', user.strip() or '（无）', '',

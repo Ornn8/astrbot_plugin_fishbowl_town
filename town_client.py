@@ -110,3 +110,12 @@ class TownClient:
 
     async def visit_lines(self, visit_id: str):
         return await self.request('GET', 'visits/' + visit_id, timeout=8)
+
+    # 0.4.2 鱼缸岛（isle.py）：规矩按版本取一次；一回合里先查再出手
+    async def isle_static(self, have: str = ''):
+        """规矩全文：have = 手上的版本。总是 200：{version, same: true} 或 {version, blocks: {rules, verbs, goods, law}}。"""
+        return await self.request('GET', 'isle/static', query={'v': have or None}, timeout=8)
+
+    async def isle_read(self, turn_id: str, read: dict):
+        """查一页（只读，不占行动次数）：read = {do: 'look', topic, 筛选…, page}。→ {ok, text, next}。"""
+        return await self.request('POST', 'isle/read', body={'turn': turn_id, 'read': read}, timeout=8)

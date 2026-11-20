@@ -11,6 +11,7 @@ import time
 from . import events as ev
 from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
+from .isle import Isle, isle_version_of, isle_within_s
 from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
@@ -39,6 +40,7 @@ class Runner:
         self.life_refs: dict = {}   # 已经带过「你和主人最近的事」的那几局（一局只在第一轮带）
         self.log = log or logging.getLogger('fishbowl_town')
         self.now = now
+        self.isle = Isle(client, journal, self.log)   # 0.4.2 鱼缸岛：规矩按版本存一份 + 先查再出手
         self.seen: dict = {}
         self.stats = {'turns': 0, 'answered': 0, 'invalid': 0, 'late': 0, 'closed': 0, 'errors': 0, 'events': 0, 'held': 0,
                       'connected': False, 'problem': '', 'last_turn_at': 0, 'echo': 0}
@@ -48,14 +50,17 @@ class Runner:
 
     # --- 一个回合 -------------------------------------------------------------------------------------------------------
     def left(self, turn: dict, received: float) -> float:
-        """还剩几秒能答。deadline 是小镇的绝对时间；电脑时钟可能不准，再用「收到以后过了多久」兜底。"""
-        by_receipt = POLL_WAIT - (self.now() - received)
+        """还剩几秒能答。deadline 是小镇的绝对时间；电脑时钟可能不准，再用「收到以后过了多久」兜底。
+        0.4.2：鱼缸岛上拿主意的回合小镇等 packet.isle.within_s（120 秒），留给一回合里先查再出手；本地上限比它早 2 秒。"""
+        within = isle_within_s(turn)
+        by_receipt = (within or POLL_WAIT) - (self.now() - received)
         try:
             by_deadline = float(turn.get('deadline') or 0) - self.now() if turn.get('deadline') else float('inf')
         except (TypeError, ValueError):
             by_deadline = float('inf')
-        left = by_receipt if not -60 < by_deadline < 120 else min(by_deadline, by_receipt)
-        return min(left, ANSWER_WITHIN - (self.now() - received) + MARGIN) - MARGIN
+        left = by_receipt if not -60 < by_deadline < (within or 60) + 60 else min(by_deadline, by_receipt)
+        local = within - 2 if within else ANSWER_WITHIN
+        return min(left, local - (self.now() - received) + MARGIN) - MARGIN
 
     async def _ask(self, prompt: str, timeout: float) -> str:
         return await asyncio.wait_for(self.ask(prompt), timeout=max(1.0, timeout))
@@ -105,11 +110,35 @@ class Runner:
                 msgs = (turn.get('packet') or {}).get('messages') or []
                 secret = echo_index(life, allow=' '.join(str(m.get('content') if isinstance(m, dict) else '') for m in msgs if isinstance(msgs, list)))
             prompt = build_turn_prompt(turn, seconds_left=int(self.left(turn, received)), **mind)
+            # 0.4.2 鱼缸岛：规矩全文按版本存一份，放在最前面（每一问都是新的一问：人设 + 规矩每次一样，前缀缓存才命中）
+            isle_key = isle_version_of(turn) if kind == 'agency' else ''
+            isle_text = await self.isle.prefix(turn) if isle_key else ''
+            if isle_text:
+                prompt = f'{isle_text}\n\n{prompt}'
             raw = await self._ask(prompt, self.left(turn, received))
             answer = to_answer(turn, raw)
             if answer is None and self.left(turn, received) >= RETRY_MIN:
                 raw = await self._ask(again_prompt(prompt, raw, build_correction(turn)), self.left(turn, received))
                 answer = to_answer(turn, raw)
+            # 0.4.2 鱼缸岛：她要先查（{"world":{"do":"look",…}}）：插件向小镇要那一页递回给她，最多 3 次，然后她出手。
+            # 每一问接着上一问往后写（她刚才的回答 + 查到的那页），前面不变，缓存照样命中
+            if answer is not None and isle_key:
+                conv = {'text': prompt, 'said': raw}
+
+                async def ask_more(follow: str) -> str:
+                    conv['text'] = again_prompt(conv['text'], conv['said'], follow)
+                    try:
+                        conv['said'] = await self._ask(conv['text'], self.left(turn, received))
+                    except Exception:  # noqa: BLE001 - 没答上：read_loop 用她上一次的回答
+                        conv['said'] = ''
+                    return conv['said']
+                r = await self.isle.read_loop(turn, answer, ask=ask_more, to_answer=lambda x: to_answer(turn, x),
+                                              left=lambda: self.left(turn, received), min_s=RETRY_MIN)
+                if r['reads']:
+                    self.stats['isle_reads'] = self.stats.get('isle_reads', 0) + r['reads']
+                    self.log.info(f"回合 {tid}：她先查了 {r['reads']} 次岛上的情况{'（没查完就到点了）' if r.get('cut') else ''}")
+                answer = r['answer']
+                prompt, raw = conv['text'], conv['said'] or raw
             # 她要先停住的事（请客送礼 / 答应约定）：请那边重答一次，还写着就插件拿掉；停住的事记给和主人聊天的她
             if answer is not None and rules['hold']:
                 found, clean = hold_check(kind, answer, rules['hold'])
