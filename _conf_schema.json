@@ -24,6 +24,12 @@
     "_special": "select_provider",
     "hint": "她在小镇打牌、串门时调哪个模型。不选就用你和她私聊时的模型。小镇的回合要在 25 秒内答完，太慢的模型会常常超时。"
   },
+  "isle_pictures": {
+    "description": "岛上让她看图",
+    "type": "bool",
+    "default": true,
+    "hint": "她在鱼缸岛上查地图、看一个地方长什么样时，小镇的模型能看图就把图给她看（一张约几厘钱，按你的模型计费）；模型看不了图的只给她图上画的是什么。关掉就一律只给字。"
+  },
   "owner_umo": {
     "description": "你和她的私聊",
     "type": "string",

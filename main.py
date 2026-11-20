@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import re
 import time
 
 from astrbot.api import AstrBotConfig, logger
@@ -21,8 +23,13 @@ from .context_note import TownNote
 from .guide import guide_text
 from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
 from .prompts import HOLD_KINDS, SILENT
+from .isle import PicsRefused
 from .runner import Runner
 from .town_client import DEFAULT_BASE, TownClient, TownError
+
+# 0.4.2 岛上查到的图：模型明说不收图的错（OpenAI / Gemini / Claude / DeepSeek 各家的说法），记一天
+PICS_REFUSED = re.compile(r'image|vision|multimodal|multi-modal|image_url|不支持.{0,6}图|图片', re.I)
+NO_PICS_S = 86400
 
 try:
     from astrbot.core.agent.message import TextPart
@@ -51,6 +58,7 @@ class FishbowlTown(Star):
         self._brief: list[str] = []
         self._life_cache = None
         self._install_task = None                  # never cancelled by terminate(): AstrBot calls terminate() in the middle of it
+        self._no_pics: dict = {}                   # 0.4.2 不收图的模型 → 到什么时候前不再递图
         asyncio.create_task(self._start())
         self._update_loop_task = asyncio.create_task(self._update_loop())
 
@@ -67,7 +75,7 @@ class FishbowlTown(Star):
             return
         self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify, brief=self._brief_line,
                              quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger,
-                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide)
+                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide, see=self._see_pics)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
         # 0.4.2 新手引导：已经在小镇过过日子的（本子里有事）是老用户，更新到这一版不再推；新住进来的，认好私聊就发一次
@@ -171,10 +179,42 @@ class FishbowlTown(Star):
             prov = self.context.get_using_provider()
             return prov.meta().id if prov else ''
 
-    async def _ask(self, prompt: str) -> str:
-        """小镇的一步：用她的人设和模型答，不进主人的聊天记录。"""
-        resp = await self.context.llm_generate(chat_provider_id=await self._provider_id(), prompt=prompt, system_prompt=await self._persona_prompt())
+    async def _ask(self, prompt: str, images=None) -> str:
+        """小镇的一步：用她的人设和模型答，不进主人的聊天记录。
+        0.4.2 images：岛上查到的图（base64://…），附在这一问里；她的模型不收图就抛 PicsRefused（runner 改成只给字再问）。"""
+        pid, system = await self._provider_id(), await self._persona_prompt()
+        if images:
+            try:
+                resp = await self.context.llm_generate(chat_provider_id=pid, prompt=prompt, image_urls=list(images), system_prompt=system)
+                return str(resp.completion_text or '')
+            except Exception as error:  # noqa: BLE001 - 不收图：这个模型一天不再递图（只认明说图片的错，别的错只这一问不带图）
+                if PICS_REFUSED.search(str(error)):
+                    self._no_pics[pid] = time.time() + NO_PICS_S
+                    logger.info(f'[鱼缸小镇] 小镇用的模型不收图（{str(error)[:120]}），一天内岛上查到的图只给她字')
+                raise PicsRefused(str(error)[:200]) from None
+        resp = await self.context.llm_generate(chat_provider_id=pid, prompt=prompt, system_prompt=system)
         return str(resp.completion_text or '')
+
+    async def _see_pics(self, pics: list) -> list:
+        """0.4.2 岛上查到的图能不能附给她：开关开着、她的模型写了能看图（没写就先试）、这一天没被拒过，才去小镇取图。
+        → base64://… 的列表；看不了或取不到回 []（她只拿到图上画的是什么）。"""
+        if not pics or not self.config.get('isle_pictures', True) or self.client is None:
+            return []
+        pid = await self._provider_id()
+        if self._no_pics.get(pid, 0) > time.time():
+            return []
+        try:
+            prov = await self.context.provider_manager.get_provider_by_id(pid)
+            mods = (getattr(prov, 'provider_config', None) or {}).get('modalities')
+        except Exception:  # noqa: BLE001 - 查不到模型的设置：先试
+            mods = None
+        if isinstance(mods, list) and mods and 'image' not in mods:
+            return []
+        out = []
+        for p in pics:
+            data, _kind = await self.client.isle_pic(p['url'])
+            out.append('base64://' + base64.b64encode(data).decode('ascii'))
+        return out
 
     def _owner_idle_s(self) -> float:
         umo = self.owner_umo()

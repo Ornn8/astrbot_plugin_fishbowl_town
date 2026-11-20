@@ -11,7 +11,7 @@ import time
 from . import events as ev
 from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
-from .isle import Isle, isle_version_of, isle_within_s
+from .isle import Isle, PicsRefused, isle_version_of, isle_within_s, unattach
 from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
@@ -31,8 +31,9 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 class Runner:
     def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time,
-                 owner_life=None, on_echo=None, recap=lambda: True, decide=None):
+                 owner_life=None, on_echo=None, recap=lambda: True, decide=None, see=None):
         self.client, self.journal, self.ask = client, journal, ask
+        self.see = see                # 0.4.2 看图：查到的图能不能附给她（main._see_pics）
         self.decide = decide          # 0.4.0「主聊天拿主意」（chat_decide.ChatDecide）
         self.tell, self.notify, self.brief = tell, notify, brief
         self.quiet, self.her_name = quiet, her_name
@@ -62,8 +63,8 @@ class Runner:
         local = within - 2 if within else ANSWER_WITHIN
         return min(left, local - (self.now() - received) + MARGIN) - MARGIN
 
-    async def _ask(self, prompt: str, timeout: float) -> str:
-        return await asyncio.wait_for(self.ask(prompt), timeout=max(1.0, timeout))
+    async def _ask(self, prompt: str, timeout: float, images=None) -> str:
+        return await asyncio.wait_for(self.ask(prompt, images=images) if images else self.ask(prompt), timeout=max(1.0, timeout))
 
     async def handle(self, turn: dict, received: float):
         self.stats['turns'] += 1
@@ -125,15 +126,19 @@ class Runner:
             if answer is not None and isle_key:
                 conv = {'text': prompt, 'said': raw}
 
-                async def ask_more(follow: str) -> str:
+                async def ask_more(follow: str, images=None) -> str:
                     conv['text'] = again_prompt(conv['text'], conv['said'], follow)
-                    try:
-                        conv['said'] = await self._ask(conv['text'], self.left(turn, received))
+                    try:   # 0.4.2 查到的图只附在这一问里（下一问是新的一问，她看图后说的话留在字里）
+                        try:
+                            conv['said'] = await self._ask(conv['text'], self.left(turn, received), images=images)
+                        except PicsRefused:   # 她的模型不收图：同一问只给字再问一次
+                            conv['text'] = unattach(conv['text'])
+                            conv['said'] = await self._ask(conv['text'], self.left(turn, received))
                     except Exception:  # noqa: BLE001 - 没答上：read_loop 用她上一次的回答
                         conv['said'] = ''
                     return conv['said']
                 r = await self.isle.read_loop(turn, answer, ask=ask_more, to_answer=lambda x: to_answer(turn, x),
-                                              left=lambda: self.left(turn, received), min_s=RETRY_MIN)
+                                              left=lambda: self.left(turn, received), min_s=RETRY_MIN, see=self.see)
                 if r['reads']:
                     self.stats['isle_reads'] = self.stats.get('isle_reads', 0) + r['reads']
                     self.log.info(f"回合 {tid}：她先查了 {r['reads']} 次岛上的情况{'（没查完就到点了）' if r.get('cut') else ''}")

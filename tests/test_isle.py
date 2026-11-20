@@ -125,6 +125,79 @@ def test_town_without_isle_routes_still_gets_her_answer(tmp_path):
     assert len(t.posted) == 1 and not t.reads and prompts[0].startswith('【鱼缸小镇')
 
 
+PIC = {'url': 'https://fishbowltown.com/town/api/outside/isle/pic/0123456789ab.jpg', 'alt': '镜湖东边的空地，南边挨着路'}
+
+
+class PicTown(Town):
+    async def isle_read(self, tid, read):
+        self.reads.append((tid, read))
+        return {'ok': True, 'text': '图上范围：左上 (80,280)，右下 (140,320)，一小格 20 米', 'next': None, 'pics': [PIC, {'url': ''}, PIC, PIC]}
+
+
+def pic_turn(tmp_path, see, refuse=False):
+    t = PicTown()
+    asks = []
+
+    async def ask(prompt, images=None):
+        asks.append((prompt, images))
+        if images and refuse:
+            raise I.PicsRefused('model does not support image input')
+        return ['{"action":"none","world":{"do":"look","topic":"地图","near":"镜湖"}}',
+                '{"action":"none","world":{"do":"claim","poly":[[100,290],[120,290],[120,305]],"max":900}}'][min(len(asks) - 1, 1)]
+    r = Runner(t, Journal(tmp_path / 'j.json'), ask, see=see)
+    r.running = True
+    asyncio.run(r.handle(isle_turn('ot_pic'), time.time()))
+    return t, asks
+
+
+def test_pictures_go_with_the_ask_right_after_the_look_when_her_model_sees(tmp_path):
+    seen = []
+
+    async def see(pics):
+        seen.append(pics)
+        return ['base64://AAAA' for _ in pics]
+    t, asks = pic_turn(tmp_path, see)
+    assert seen == [[PIC, PIC]], 'at most two pictures, empty urls dropped'
+    assert asks[0][1] is None and asks[1][1] == ['base64://AAAA', 'base64://AAAA']
+    assert '【这一页带了 2 张图，就附在这条消息里' in asks[1][0] and '① 镜湖东边的空地' in asks[1][0]
+    assert json.loads(t.posted[0][1])['world']['do'] == 'claim'
+
+
+def test_her_model_without_pictures_gets_what_the_picture_shows(tmp_path):
+    async def see(pics):
+        return []
+    t, asks = pic_turn(tmp_path, see)
+    assert all(a[1] is None for a in asks) and I.NO_PICS_HEAD in asks[1][0] and '② 镜湖东边的空地' in asks[1][0]
+    assert '附在这条消息里' not in asks[1][0]
+
+
+def test_a_refused_picture_is_asked_again_as_words_and_the_text_stops_claiming_a_picture(tmp_path):
+    async def see(pics):
+        return ['base64://AAAA']
+    t, asks = pic_turn(tmp_path, see, refuse=True)
+    assert asks[1][1] == ['base64://AAAA'] and asks[2][1] is None
+    assert I.NO_PICS_HEAD in asks[2][0] and '附在这条消息里' not in asks[2][0]
+    assert json.loads(t.posted[0][1])['world']['do'] == 'claim'
+
+
+def test_a_failed_picture_fetch_still_gives_her_the_words(tmp_path):
+    async def see(pics):
+        raise RuntimeError('town down')
+    t, asks = pic_turn(tmp_path, see)
+    assert asks[1][1] is None and I.NO_PICS_HEAD in asks[1][0]
+
+
+def test_only_the_towns_own_picture_urls_are_fetched():
+    from astrbot_plugin_fishbowl_town.town_client import TownClient
+    c = TownClient('fbo_test_code_123456')
+    ok = 'https://fishbowltown.com/town/api/outside/isle/pic/0123456789ab.jpg'
+    assert c.isle_pic_url(ok) == ok and c.isle_pic_url('isle/pic/0123456789ab.png').endswith('/outside/isle/pic/0123456789ab.png')
+    for bad in ('https://evil.example/town/api/outside/isle/pic/0123456789ab.jpg', 'http://fishbowltown.com/town/api/outside/isle/pic/0123456789ab.jpg',
+                ok + '?x=1', 'https://fishbowltown.com/town/api/outside/isle/pic/../../x/0123456789ab.jpg',
+                'https://fishbowltown.com/other/isle/pic/0123456789ab.jpg', 'https://fishbowltown.com/town/api/outside/isle/pic/zz.jpg'):
+        assert c.isle_pic_url(bad) is None, bad
+
+
 def test_not_an_island_turn_keeps_the_old_prompt_and_25s():
     plain = {'turn_id': 'p', 'kind': 'agency', 'packet': {'messages': [], 'reply': {'format': 'json'}}}
     assert ISLE_LOOK_NOTE not in build_turn_prompt(plain, seconds_left=20)

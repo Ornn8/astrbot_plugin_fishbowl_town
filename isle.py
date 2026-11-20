@@ -3,7 +3,9 @@
 1. 规矩只发一次：回合里只带版本号 packet.isle.static；规矩全文插件按版本存一份（town.json 的 isle_static），
    拼提示时放在最前面——AstrBot 每一问都是新的一问，人设 + 规矩每次都一样，她那边模型的前缀缓存才命中得了。版本变了才再取。
 2. 想看再查：她的回答写 {"world":{"do":"look","topic":…}}，插件向小镇要这一页、递回给她，最多 3 次，然后她出手。查看不占她的行动次数。
-岛上拿主意的回合时限是 packet.isle.within_s（120 秒），不是牌桌的 25 秒。"""
+岛上拿主意的回合时限是 packet.isle.within_s（120 秒），不是牌桌的 25 秒。
+3. 看图（主人 11-20「直接弄吧，很便宜无所谓」；小镇 platform/岛-鱼看图-接口.md）：查到的那页带 pics（地图、那个地方的样子）时，
+   她的模型看得了图就把图附在递回去的那一问里，看不了就只给图上画的是什么（alt）。"""
 from __future__ import annotations
 
 import asyncio
@@ -15,10 +17,13 @@ import time
 READ_MAX = 3
 READ_TEXT_MAX = 1500
 WITHIN_MAX_S = 180
+PIC_MAX = 2          # 一页最多带几张图
+ALT_MAX = 120
 
 BLOCKS = (('rules', '岛上的规矩'), ('verbs', '能做的事（细节用 look 查「怎么做」）'), ('goods', '标准货品'), ('law', '镇规'))
 TOPIC_ZH = {'地': '挂着的地', '楼': '待承包的楼', '铺位': '空铺位', '店': '开着的店', '订单': '接力订单', '缺的': '最缺的',
-            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱'}
+            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子'}
+CIRCLED = '①②'
 _HEX = re.compile(r'^[0-9a-fA-F]{6,64}$')
 
 
@@ -87,6 +92,40 @@ def clip(s, n: int) -> str:
     return t[:n - 1] + '…' if len(t) > n else t
 
 
+def pics_of(r) -> list:
+    """查到的那页带的图：[{url, alt}]，最多 PIC_MAX 张；没有或格式不对回 []。"""
+    raw = r.get('pics') if isinstance(r, dict) else None
+    out = []
+    for p in raw if isinstance(raw, list) else []:
+        if isinstance(p, dict) and isinstance(p.get('url'), str) and p['url'].strip():
+            out.append({'url': p['url'].strip(), 'alt': clip(' '.join(str(p.get('alt') or '').split()), ALT_MAX)})
+        if len(out) >= PIC_MAX:
+            break
+    return out
+
+
+NO_PICS_HEAD = '【这一页带了图，你这边看不了图；图上画的是】'
+_PICS_HEAD = re.compile(r'【这一页带了 \d 张图，就附在这条消息里，照图上看到的拿主意】')
+
+
+class PicsRefused(Exception):
+    """她的模型这一问不收图（main._ask 抛）：把「附在这条消息里」改成只给字，再问一次。"""
+
+
+def pic_note(pics: list, attached: bool) -> str:
+    """接在查到的那页字后面：附了图就说附在这一问里；看不了图就只说图上画的是什么。"""
+    if not pics:
+        return ''
+    alts = [f'{CIRCLED[k]} {p["alt"] or "（没写画的是什么）"}' for k, p in enumerate(pics)]
+    head = f'【这一页带了 {len(pics)} 张图，就附在这条消息里，照图上看到的拿主意】' if attached else NO_PICS_HEAD
+    return '\n'.join(['', head, *alts])
+
+
+def unattach(text: str) -> str:
+    """图没递成：字里「附在这条消息里」改成「你这边看不了图」，后面几问里就不会说着一张不存在的图。"""
+    return _PICS_HEAD.sub(NO_PICS_HEAD, text)
+
+
 def build_read_followup(read: dict, text: str, left: int) -> str:
     """查到的那一页递回给她的话。"""
     topic = TOPIC_ZH.get(read.get('topic')) or read.get('topic') or '岛上'
@@ -132,9 +171,10 @@ class Isle:
             self.log.info(f'鱼缸岛的规矩这次没取到（{getattr(error, "code", None) or error}），先用手上的')
         return have.get('text') or ''
 
-    async def read_loop(self, turn, answer: str, *, ask, to_answer, left, min_s: float = 8, max_reads: int = READ_MAX) -> dict:
+    async def read_loop(self, turn, answer: str, *, ask, to_answer, left, min_s: float = 8, max_reads: int = READ_MAX, see=None) -> dict:
         """她要先查：向小镇要那一页、递回给她，最多 max_reads 次；时间不够就不查了，请她直接定。
-        ask(text) -> 她的原话（异步，出错回 ''）；to_answer(raw) -> 交给小镇的字符串或 None；left() -> 还剩几秒。"""
+        ask(text[, images]) -> 她的原话（异步，出错回 ''）；to_answer(raw) -> 交给小镇的字符串或 None；left() -> 还剩几秒。
+        see(pics) -> 能附给她的图（base64:// 串的列表；她的模型看不了图、取图失败回 []）。"""
         cur, reads = answer, 0
         while True:
             read = read_of(cur) if cur is not None else None
@@ -147,15 +187,23 @@ class Isle:
                         return {'answer': again, 'reads': reads}
                 return {'answer': drop_look(cur), 'reads': reads, 'cut': True}   # 还是在查：look 不交给小镇，别的照交
             reads += 1
+            pics, images = [], []
             try:
                 r = await self.client.isle_read(turn['turn_id'], read)
                 if isinstance(r, dict) and r.get('ok') is not False:
                     text = clip(r.get('text'), READ_TEXT_MAX) + (f'\n（还有下一页：再查一次，写 "page": "{clip(r.get("next"), 40)}"）' if r.get('next') else '')
+                    pics = pics_of(r)
                 else:
                     text = f"这次没查到：{clip((r or {}).get('text') if isinstance(r, dict) else '', 120) or '小镇没说为什么'}。就按你手上的情况拿主意。"
             except Exception as error:  # noqa: BLE001 - 查不到就按手上的定
                 text = f"这次没查到（{getattr(error, 'code', None) or '出错了'}）。就按你手上的情况拿主意。"
-            nxt = to_answer(await ask(build_read_followup(read, text, max_reads - reads)))
+            if pics and see is not None:
+                try:
+                    images = list(await see(pics) or [])[:PIC_MAX]
+                except Exception as error:  # noqa: BLE001 - 图取不到：只给字
+                    self.log.info(f'查到的图这次没取到（{getattr(error, "code", None) or error}），只给她图上画的是什么')
+            follow = build_read_followup(read, text + pic_note(pics, bool(images)), max_reads - reads)
+            nxt = to_answer(await (ask(follow, images) if images else ask(follow)))
             if nxt is None:   # 看完那一下没答上（超时、读不了）：用她上一次的回答，去掉 look
                 return {'answer': drop_look(cur), 'reads': reads, 'cut': True}
             cur = nxt

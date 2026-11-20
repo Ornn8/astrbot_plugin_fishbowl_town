@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlsplit
 
 import aiohttp
 
 DEFAULT_BASE = 'https://fishbowltown.com/town/api/outside/'
 SECRET = re.compile(r'(fbo_[A-Za-z0-9_-]{6,}|\bsk-[A-Za-z0-9_-]{8,})')
+PIC_PATH = re.compile(r'/isle/pic/[0-9a-f]{12}\.(jpg|png)$')
+PIC_BYTES = 1_500_000
 
 
 def redact(s) -> str:
@@ -117,5 +120,38 @@ class TownClient:
         return await self.request('GET', 'isle/static', query={'v': have or None}, timeout=8)
 
     async def isle_read(self, turn_id: str, read: dict):
-        """查一页（只读，不占行动次数）：read = {do: 'look', topic, 筛选…, page}。→ {ok, text, next}。"""
+        """查一页（只读，不占行动次数）：read = {do: 'look', topic, 筛选…, page}。→ {ok, text, next, pics?}。"""
         return await self.request('POST', 'isle/read', body={'turn': turn_id, 'read': read}, timeout=8)
+
+    def isle_pic_url(self, url: str) -> str | None:
+        """查到的那页带的图的地址：只认小镇自己的 isle/pic/<12 位>.jpg|png（同一个域名）；别的地址一律不取。"""
+        u = str(url or '').strip()
+        root = urlsplit(self.root)
+        if not re.match(r'^https?://', u):
+            u = self.root + u.lstrip('/')
+        p = urlsplit(u)
+        if p.scheme != root.scheme or p.netloc != root.netloc or p.query or p.fragment or '..' in p.path:
+            return None
+        return u if p.path.startswith(root.path) and PIC_PATH.search(p.path) else None
+
+    async def isle_pic(self, url: str, timeout: float = 8) -> tuple[bytes, str]:
+        """取一张图（岛-鱼看图-接口.md）：图是公开的，不带接入码；≤ PIC_BYTES 的 JPEG / PNG。→ (图, 'image/jpeg' 或 'image/png')。"""
+        u = self.isle_pic_url(url)
+        if not u:
+            raise TownError('PIC_URL', 0, '不是小镇的图')
+        http = await self._http()
+        try:
+            async with http.get(u, headers={'User-Agent': self.ua}, timeout=aiohttp.ClientTimeout(total=timeout)) as res:
+                kind = (res.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+                if res.status != 200:
+                    raise TownError(f'HTTP_{res.status}', res.status, '图没取到')
+                if kind not in ('image/jpeg', 'image/png'):
+                    raise TownError('PIC_TYPE', 0, kind or '?')
+                data = await res.content.read(PIC_BYTES + 1)
+        except aiohttp.ClientError as error:
+            raise TownError('NETWORK', 0, redact(error)) from None
+        except TimeoutError:
+            raise TownError('NETWORK', 0, 'timeout') from None
+        if not data or len(data) > PIC_BYTES:
+            raise TownError('PIC_SIZE', 0, str(len(data)))
+        return data, kind
