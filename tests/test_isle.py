@@ -15,13 +15,13 @@ from astrbot_plugin_fishbowl_town.prompts import ISLE_LOOK_NOTE, build_turn_prom
 from astrbot_plugin_fishbowl_town.runner import Runner  # noqa: E402
 
 V1, V2 = 'a1b2c3d4e5f6', 'ffeeddccbbaa'
-BLOCKS = {'rules': '岛上只用贝。', 'verbs': ['claim 圈地', 'bid 出价'], 'goods': '粮 鱼 木 石', 'law': '不许场外买卖。'}
+BLOCKS = {'rules': '岛上只用鲸币。', 'verbs': ['claim 圈地', 'bid 出价'], 'goods': '粮 鱼 木 石', 'law': '不许场外买卖。'}
 
 
 def isle_turn(tid, version=V1, within=120):
     return {'turn_id': tid, 'kind': 'agency', 'deadline': time.time() + within,
             'packet': {'purpose': 'agency', 'reasons': ['pulled'], 'isle': {'static': version, 'within_s': within},
-                       'messages': [{'role': 'system', 'content': '拿主意的规则'}, {'role': 'user', 'content': '{"我":{"贝":800},"查":"地 楼 铺位 店"}'}],
+                       'messages': [{'role': 'system', 'content': '拿主意的规则'}, {'role': 'user', 'content': '{"我":{"鲸币":800},"查":"地 楼 铺位 店"}'}],
                        'reply': {'format': 'json', 'hint': '{"action":"none"}', 'max_chars': 400}}}
 
 
@@ -32,7 +32,7 @@ def test_helpers():
     assert I.isle_within_s({'packet': {}}) == 0
     text = I.rules_text(BLOCKS)
     assert text == I.rules_text(dict(reversed(list(BLOCKS.items()))))
-    assert text.startswith('〔岛上的规矩〕\n岛上只用贝。\n〔能做的事') and 'claim 圈地\nbid 出价\n〔标准货品〕' in text
+    assert text.startswith('〔岛上的规矩〕\n岛上只用鲸币。\n〔能做的事') and 'claim 圈地\nbid 出价\n〔标准货品〕' in text
     assert I.read_of('{"action":"none","world":{"do":"look","topic":"地","near":"镜湖","max_coin":800}}') == {'do': 'look', 'topic': '地', 'near': '镜湖', 'max_coin': 800}
     assert I.read_of('{"world":{"do":"claim"}}') is None and I.read_of('读不了') is None
     assert json.loads(I.drop_look('{"action":"pier","world":{"do":"look","topic":"地"}}')) == {'action': 'pier'}
@@ -84,7 +84,7 @@ class Town:
 
     async def isle_read(self, tid, read):
         self.reads.append((tid, read))
-        return {'ok': True, 'text': f"1. {read['topic']}：镜湖边 12×12，底价 720 贝", 'next': None}
+        return {'ok': True, 'text': f"1. {read['topic']}：镜湖边 12×12，底价 720 鲸币", 'next': None}
 
 
 def run_turn(tmp_path, answers, **town):
