@@ -109,4 +109,22 @@ def test_a_closed_old_town_route_is_not_asked_again():
     asyncio.run(run())
     assert calls.count('visits') == 1 and calls.count('album') == 3 and calls.count('turns') == 3
     assert 'visits/v1' not in calls
+
+    async def restart(method, path, **kw):                 # 小镇重启（回合那条路回 503）：记着的「关了」作废
+        calls.append(path)
+        raise TownError('TOWN_RESTARTING', 503)
+    c._request = restart
+
+    async def again():
+        try:
+            await c.turns()
+        except TownError:
+            pass
+        c._request = fake
+        try:
+            await c.visit_list()
+        except TownError:
+            pass
+    asyncio.run(again())
+    assert calls.count('visits') == 2
     assert transient('TOWN_OFF', 'turns') and transient('TOWN_OFF') and not transient('TOWN_OFF', 'visits')

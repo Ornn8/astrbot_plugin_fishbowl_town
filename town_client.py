@@ -71,7 +71,12 @@ class TownClient:
 
     async def request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15):
         if core_path(path):
-            return await self._request(method, path, query=query, body=body, timeout=timeout)
+            try:
+                return await self._request(method, path, query=query, body=body, timeout=timeout)
+            except TownError as error:          # 小镇在重启 / 连不上：重启以后各块可能又开了，记着的「关了」作废
+                if error.code == 'NETWORK' or error.status >= 500:
+                    self.shut.clear()
+                raise
         part = path.split('/')[0]
         was = self.shut.get(part)
         if was and was[0] > time.monotonic():            # 刚说过关了：不再去问
