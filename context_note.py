@@ -11,6 +11,7 @@ import time
 
 from .bridge import recap_lines
 from .journal import TOWN_WHO
+from .old_town import OLD_TOWN, old_town_open
 
 TTL = 300
 RETURN_GAP = 3 * 3600
@@ -39,7 +40,7 @@ def _name(x) -> str:
     return f'{n}（以前叫{was}）' if n and was and was != n else n
 
 
-def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=()) -> str:
+def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=(), at: float | None = None) -> str:
     b = bonds if isinstance(bonds, dict) and bonds.get('ok') is not False else {}
     lines = []
     if now_line:
@@ -64,6 +65,8 @@ def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=()) ->
         lines.append(f'- {_str(a, 80)}')
     if not lines:
         return ''
+    if old_town_open(at):            # 0.4.3：老镇这周还开着，11-28 关门（关了以后这一行自己不见）
+        lines.append(f'- {OLD_TOWN}')
     return '\n'.join([HEAD + TOWN_WHO, *lines, CLOSE, FLOOR])
 
 
@@ -157,7 +160,7 @@ class TownNote:
                 entry.update(now_line=now_line, now_at=self.now())
             self.sent[key] = entry
             return out
-        text = render_block(await self._bonds(), now_line=now_line, mind=self.journal.decision_lines(1), asks=asks)
+        text = render_block(await self._bonds(), now_line=now_line, mind=self.journal.decision_lines(1), asks=asks, at=self.now())
         # 0.3.3：他隔了一阵回来，只给概况不够（主人：「所有用户都希望小镇发生的详细内容能进聊天」）：上次放过之后的事也一件件附上
         since = max((last or {}).get('at', 0), (last or {}).get('fresh_at', 0)) or self.now() - 6 * 3600
         fresh = [f'- {_str(x, LINE_MAX)}' for x in self.journal.fresh(since)]

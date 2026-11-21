@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -24,9 +25,27 @@ class TownError(Exception):
         self.code, self.status, self.reason, self.retry_after, self.data = code, status, reason, retry_after, data
 
 
-def transient(code: str) -> bool:
-    """小镇重启、网络抖一下时会出现的错：不停地重连，不打扰主人。"""
+def transient(code: str, path: str = '') -> bool:
+    """小镇重启、网络抖一下时会出现的错：不停地重连，不打扰主人。
+    0.4.3：TOWN_OFF 只在回合、事件、状态这些一直都在的接口上算「一会儿就好」；老镇那几块（串门记录、相册、关系……）回 TOWN_OFF 是那地方关了，不重试。"""
+    if code == 'TOWN_OFF' and path and not core_path(path):
+        return False
     return code in ('NETWORK', 'UNKNOWN', 'TOWN_OFF', 'TOWN_RESTARTING') or bool(re.fullmatch(r'HTTP_5\d\d', code))
+
+
+# 一直都在的接口（她住在鱼缸岛上也照样用）。别的是老镇那几块：11-28 老镇关门以后会回 TOWN_OFF 或 404
+CORE = ('turns', 'events', 'status', 'agency', 'settings', 'consent', 'isle/')
+CLOSED_S = 30 * 60          # 老镇的一块回了「关了」：这么久里不再去问（不是一直重试），之后再看一眼
+
+
+def core_path(path: str) -> bool:
+    p = str(path or '').lstrip('/')
+    return any(p == c or p.startswith(c if c.endswith('/') else c + '/') for c in CORE)
+
+
+def closed(error) -> bool:
+    """老镇那一块关了（或这个小镇没有这一项）：TOWN_OFF / 没有这个地址，都是 404。"""
+    return isinstance(error, TownError) and error.status == 404 and error.code in ('TOWN_OFF', 'HTTP_404')
 
 
 class TownClient:
@@ -38,6 +57,7 @@ class TownClient:
         self.ua = user_agent
         self._session = session
         self._own = session is None
+        self.shut: dict = {}        # 0.4.3 老镇那一块 -> (到什么时候前不再去问, 那次的错)
 
     async def _http(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -50,6 +70,20 @@ class TownClient:
             await self._session.close()
 
     async def request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15):
+        if core_path(path):
+            return await self._request(method, path, query=query, body=body, timeout=timeout)
+        part = path.split('/')[0]
+        was = self.shut.get(part)
+        if was and was[0] > time.monotonic():            # 刚说过关了：不再去问
+            raise TownError(was[1].code, was[1].status, was[1].reason, 0, was[1].data)
+        try:
+            return await self._request(method, path, query=query, body=body, timeout=timeout)
+        except TownError as error:
+            if closed(error):
+                self.shut[part] = (time.monotonic() + CLOSED_S, error)
+            raise
+
+    async def _request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15):
         params = {k: str(v) for k, v in (query or {}).items() if v is not None}
         headers = {'Authorization': self.auth, 'User-Agent': self.ua, **({'Content-Type': 'application/json'} if body is not None else {})}
         http = await self._http()

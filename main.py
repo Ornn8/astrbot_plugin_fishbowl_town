@@ -25,7 +25,8 @@ from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
 from .prompts import HOLD_KINDS, SILENT
 from .isle import PicsRefused
 from .runner import Runner
-from .town_client import DEFAULT_BASE, TownClient, TownError
+from .old_town import closed_text, isle_status_line, now_with_isle
+from .town_client import DEFAULT_BASE, TownClient, TownError, closed
 
 # 0.4.2 岛上查到的图：模型明说不收图的错（OpenAI / Gemini / Claude / DeepSeek 各家的说法），记一天
 PICS_REFUSED = re.compile(r'image|vision|multimodal|multi-modal|image_url|不支持.{0,6}图|图片', re.I)
@@ -36,7 +37,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.2'
+VERSION = '0.4.3'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -261,8 +262,7 @@ class FishbowlTown(Star):
     async def _now_line(self) -> str:
         if not self.client:
             return ''
-        st = await self.client.status()
-        return str((st or {}).get('now_line') or '')
+        return now_with_isle(await self.client.status())     # 0.4.3：她在岛上时说「在鱼缸岛上」，不是老镇那句「在家歇着」
 
     # --- 0.3.0 两边是同一个她：主人私聊最近的几句带进小镇（过滤过，回声检查），小镇的经过带回私聊 -----------------------------------
     def _recap_on(self) -> bool:
@@ -325,7 +325,7 @@ class FishbowlTown(Star):
         self.journal.s['guide_told'] = time.time()
         self.journal.save()
         try:
-            await self._notify('她住进鱼缸小镇了。\n' + guide_text())
+            await self._notify('她住进鱼缸岛了。\n' + guide_text())
         except Exception as error:  # noqa: BLE001 - a missed guide, never the plugin
             logger.warning(f'[鱼缸小镇] 新手引导没发出去：{error}')
 
@@ -484,7 +484,9 @@ class FishbowlTown(Star):
         try:
             st = await self.client.status()
             name = (st or {}).get('name') or self._her_name or '她'
-            out.append(f"{name} 在小镇：{(st or {}).get('now_line') or (st or {}).get('outside_state') or (st or {}).get('state') or '在小镇'}")
+            out.append(f"{name} 在小镇：{now_with_isle(st) or (st or {}).get('outside_state') or (st or {}).get('state') or '在小镇'}")
+            if isle_status_line(st):
+                out.append(isle_status_line(st))
         except TownError as error:
             out.append(f'这会儿连不上小镇（{error.code}），她会自己连回去。')
         r = self.runner.stats if self.runner else {}
@@ -500,7 +502,7 @@ class FishbowlTown(Star):
             out.append(f'她打算：{self.journal.doing()}')
         if not self.owner_umo():
             out.append('还没绑定你和她的私聊：在私聊里发 /town bind。')
-        out.append(f'在地图上找她：https://fishbowltown.com/town/tour')
+        out.append('在地图上找她：https://fishbowltown.com/town/tour · 鱼缸岛：https://island.fishbowltown.com')
         out.append(self._version_line())
         return '\n'.join(out)
 
@@ -516,15 +518,17 @@ class FishbowlTown(Star):
                 return f'没有第 {n} 次。不填编号先看列表（1 是最近的一次）。'
             return render.chat(await self.client.visit_lines(visits[n - 1]['visit_id']), name, n)
         except TownError as error:
+            if closed(error):                       # 0.4.3：串门是老镇的事，老镇关了就照实说
+                return closed_text(error, owner=name != '你')
             return f'现在翻不了串门记录：{error.reason or error.code}。'
 
     # --- 她在和主人聊天时用的工具（只认主人的私聊） ------------------------------------------------------------------------
     @filter.llm_tool(name='fishbowl_town_go')
     async def tool_go(self, event: AstrMessageEvent, wish: str = '', plan: str = ''):
-        """「去小镇」：你自己想去鱼缸小镇做什么（比如去码头钓鱼、报名打一局斗地主、去找阿鲸串门），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做。主人想让你去小镇玩、打牌或串门时也用它（填 wish），那时去不去由你。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
+        """「去小镇」：你住在鱼缸岛上，自己想去哪、做什么（比如去镜湖边走走、去阿鲸的店里坐坐、做个陶碗），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做；路要自己走过去，到了才能做那儿的事。主人提议的事也可以带过去（填 wish），去不去、去哪由你定。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
 
         Args:
-            wish(string): 主人想让你做什么，用他的原话或简短转述
+            wish(string): 主人提议的事，用他的原话或简短转述；去不去由你
             plan(string): 你自己刚跟主人说的打算，用你自己的话
         """
         if not self._is_owner_chat(event):
@@ -605,7 +609,7 @@ class FishbowlTown(Star):
         try:
             return render.album(await self.client.album(), '你')
         except TownError as error:
-            return '这个小镇还没有相册。' if error.status == 404 else f'现在翻不了相册：{error.reason or error.code}。'
+            return closed_text(error) if closed(error) else f'现在翻不了相册：{error.reason or error.code}。'
 
     @filter.llm_tool(name='fishbowl_town_phone')
     async def tool_phone(self, event: AstrMessageEvent):
@@ -617,7 +621,7 @@ class FishbowlTown(Star):
         try:
             return render.phone(await self.client.phone(), '你')
         except TownError as error:
-            return '这个小镇还没开小手机。' if error.status == 404 else f'现在看不了小手机：{error.reason or error.code}。'
+            return closed_text(error) if closed(error) else f'现在看不了小手机：{error.reason or error.code}。'
 
     @filter.llm_tool(name='fishbowl_town_owner')
     async def tool_owner(self, event: AstrMessageEvent, verdict: str = '', with_name: str = '', words: str = '', end: bool = False):

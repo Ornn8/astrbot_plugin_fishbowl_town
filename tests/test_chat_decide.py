@@ -120,7 +120,7 @@ def test_town_note_appends_the_waiting_ask(tmp_path):
 
 def test_prompts():
     ex = build_turn_prompt(agency('p1'), wish='先去码头，晚上八点报名斗地主', wish_own=True, role='execute')
-    assert '照你定的去做' in ex and '不要换成别的事' in ex and '办不了：原因' in ex and 'plan.steps' in ex
+    assert '照你定的去做' in ex and '不要换成别的事' in ex and '办不了：原因' in ex and 'plan.hours' in ex
     ru = build_turn_prompt(agency('p2', ['invited']), role='rules', rules={'text': '朋友约我都去', 'hold': []})
     assert '有件事要马上回' in ru and '只答眼前这件事' in ru and '朋友约我都去' in ru
     plain = build_turn_prompt(agency('p3'))

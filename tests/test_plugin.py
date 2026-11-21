@@ -60,7 +60,7 @@ def test_journal_words_town_choices_as_not_hers_and_keeps_rules(tmp_path):
     assert j.set_holds(['spend', 'nope']) == ['spend']
     j.held('在串门时请喝东西（热可可）')
     report = j.report()
-    assert '你自己也能定去哪、做什么' in report and 'fishbowl_town_go 写下你自己的打算（plan）' in report   # 0.1.2
+    assert '去哪、做什么由你自己定' in report and 'fishbowl_town_go 写下你的打算（plan）' in report   # 0.1.2; 0.4.3 island-first
     assert '不算你的判断' not in report and '就是你自己在小镇做的' in report and 'fishbowl_town_here' in report and '「别跟谁较劲」' in report and '照你的规矩停住了，没办' in report
     again = Journal(tmp_path / 'town.json')
     assert again.rules() == '别跟谁较劲' and again.holds() == ['spend'] and again.held_since(0)
