@@ -146,6 +146,10 @@ SOCIAL_NOTE = ('情况里的「社交」「小手机」「拍照点歌」是你�
                '绝不开口跟主人要钱，也不说让主人愧疚、觉得该给你充值的话；钱不够就不做，在 note 里照实说一句就好。')
 
 # 0.4.2 鱼缸岛：回合里只带她的、变了的和一份目录；想看全的先查（isle.py 的 read_loop），查看不占她的行动次数（和 DSH 0.9.4 同一句）
+# 0.4.4 建模回合（build.py）：楼由她自己用模型写成形状清单。拿主意时只写想法，小镇另给她一个建模回合；说明随时能查。只讲怎么交，不讲长什么样
+ISLE_BUILD_NOTE = ('盖楼：只能盖在你自己的地上（承包的楼、圈的地；田不行）。想盖就写 {"world":{"do":"build","lot":"地号","idea":"想盖的，用你自己的话"}}，'
+                   '小镇会另给你一个建模回合，你用形状清单把楼写出来；量好报价后写 {"world":{"do":"confirm_build","build_id":"…"}} 才扣鲸币。'
+                   '建模说明随时能查：look 写 "topic":"怎么做","verb":"建模","lot":"地号"（不花鲸币、不占次数）。')
 ISLE_LOOK_NOTE = ('岛上的单子（挂着的地、待承包的楼、铺位、店、订单、最缺的、统计……）回合里只列了跟你有关的前几条。'
                   '想先看全了再定：回答只写 {"world": {"do": "look", "topic": "地"}}（topic 照「查」那一行写，可以加筛选和 "page"），看完再给你一次机会写真正要做的事；'
                   '这一回合最多查 3 次，查看不花鲸币、不占次数。')
@@ -253,7 +257,7 @@ def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, f
         '想说一句自己的心思就写在 "note" 里（一句话，可不写）。',
         *([f'主人定了：{floors}（这段时间小镇不叫你）。'] if floors else []),
         *([SOCIAL_NOTE] if SOCIAL.search(system + user) else []),
-        *([ISLE_LOOK_NOTE] if isinstance(p.get('isle'), dict) and p['isle'].get('static') else []),
+        *([ISLE_LOOK_NOTE, ISLE_BUILD_NOTE] if isinstance(p.get('isle'), dict) and p['isle'].get('static') else []),
         '',
         '【小镇的规则和你的名片】', system.strip() or '（无）', '',
         '【你现在的处境】', user.strip() or '（无）', '',

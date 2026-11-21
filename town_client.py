@@ -13,6 +13,8 @@ DEFAULT_BASE = 'https://fishbowltown.com/town/api/outside/'
 SECRET = re.compile(r'(fbo_[A-Za-z0-9_-]{6,}|\bsk-[A-Za-z0-9_-]{8,})')
 PIC_PATH = re.compile(r'/isle/pic/[0-9a-f]{12}\.(jpg|png)$')
 PIC_BYTES = 1_500_000
+# 长轮询时告诉小镇这个程序还答哪几种回合（小镇 outside_turns.py advertise()）
+TURN_KINDS = 'activity,build'
 
 
 def redact(s) -> str:
@@ -116,9 +118,10 @@ class TownClient:
                             data if isinstance(data, dict) else None)
         return data
 
-    # 长轮询：有回合立刻回，没有最多等 wait 秒。kinds=activity：她在码头、电玩城、小店……说的话也交给她自己写
+    # 长轮询：有回合立刻回，没有最多等 wait 秒。kinds=activity：她在码头、电玩城、小店……说的话也交给她自己写；
+    # 0.4.4 build：鱼缸岛的建模回合（她自己用模型把楼写成形状清单，build.py）。不带 build 的程序收不到建模回合
     async def turns(self, wait: int = 25):
-        return await self.request('GET', 'turns', query={'wait': wait, 'kinds': 'activity'}, timeout=wait + 10)
+        return await self.request('GET', 'turns', query={'wait': wait, 'kinds': TURN_KINDS}, timeout=wait + 10)
 
     async def answer(self, turn_id: str, answer: str):
         return await self.request('POST', 'turns/' + turn_id, body={'answer': answer}, timeout=10)

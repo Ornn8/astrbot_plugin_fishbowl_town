@@ -185,6 +185,7 @@ def test_she_plays_visits_and_decides_and_a_held_treat_never_reaches_the_town(to
         r.start()
         try:
             await wait_for(lambda: r.stats['connected'], 20)
+            assert town['call']('/mock/report')['build_ok'] is True    # 0.4.4：轮询带 kinds=activity,build（建模回合）
             town['call']('/mock/game', {'rounds': 3})
             game = await wait_for(lambda: (town['call']('/mock/report')['games'] or [None])[0])
             assert game['moves_legal'] == 3 and game['moves_default'] == 0

@@ -16,13 +16,21 @@ import time
 
 READ_MAX = 3
 READ_TEXT_MAX = 1500
+# 0.4.4「怎么做」一次给全（建模说明约 3,000 字、写程序约 5,000 字，小镇不分页）：按 1500 截掉，她就看不到上限和价钱
+HOWTO_TEXT_MAX = 6000
 WITHIN_MAX_S = 180
 PIC_MAX = 2          # 一页最多带几张图
 ALT_MAX = 120
 
 BLOCKS = (('rules', '岛上的规矩'), ('verbs', '能做的事（细节用 look 查「怎么做」）'), ('goods', '标准货品'), ('law', '镇规'))
 TOPIC_ZH = {'地': '挂着的地', '楼': '待承包的楼', '铺位': '空铺位', '店': '开着的店', '订单': '接力订单', '缺的': '最缺的',
-            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子'}
+            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子',
+            '田': '田', '建模': '建模说明'}
+_BUILD_VERB = re.compile(r'建模|build_guide|盖房')
+
+
+def text_max(read) -> int:
+    return HOWTO_TEXT_MAX if isinstance(read, dict) and read.get('topic') in ('怎么做', '建模') else READ_TEXT_MAX
 CIRCLED = '①②'
 _HEX = re.compile(r'^[0-9a-fA-F]{6,64}$')
 
@@ -62,15 +70,19 @@ def rules_text(blocks) -> str:
 
 
 def read_of(answer):
-    """她的回答里要查的那一下（{"world":{"do":"look",…}}）；不是查看回 None。"""
+    """她的回答里要查的那一下（{"world":{"do":"look",…}}）；不是查看回 None。
+    0.4.4：{"world":{"do":"build_guide","lot":…}}（建模说明，只读）也当一次查看：这一回合里就查回来给她，不占她拿主意的这一步。"""
     try:
         a = json.loads(answer) if isinstance(answer, str) else answer
     except ValueError:
         return None
     w = a.get('world') if isinstance(a, dict) else None
-    if not isinstance(w, dict) or w.get('do') != 'look':
+    if not isinstance(w, dict) or w.get('do') not in ('look', 'build_guide'):
         return None
-    return {k: (v[:60] if isinstance(v, str) else v) for k, v in w.items() if isinstance(v, (str, int, float, bool))}
+    out = {k: (v[:60] if isinstance(v, str) else v) for k, v in w.items() if isinstance(v, (str, int, float, bool))}
+    if w.get('do') == 'build_guide':
+        out.update(do='look', topic='怎么做', verb='建模')
+    return out
 
 
 def drop_look(answer: str) -> str:
@@ -128,7 +140,8 @@ def unattach(text: str) -> str:
 
 def build_read_followup(read: dict, text: str, left: int) -> str:
     """查到的那一页递回给她的话。"""
-    topic = TOPIC_ZH.get(read.get('topic')) or read.get('topic') or '岛上'
+    topic = (TOPIC_ZH['建模'] if read.get('topic') == '怎么做' and _BUILD_VERB.search(str(read.get('verb') or ''))
+             else TOPIC_ZH.get(read.get('topic')) or read.get('topic') or '岛上')
     tail = (f'接着拿主意：照原来的要求只输出那段 JSON。还想看别的可以再写一次 look（这一回合还能查 {left} 次），想好了就直接写你要做的事。'
             if left > 0 else '这一回合查不了了：现在就照原来的要求只输出那段 JSON，写你要做的事（不再写 look）。')
     return '\n'.join([f'【你刚查的：{topic}】', text or '（这一页是空的）', '', tail])
@@ -191,7 +204,7 @@ class Isle:
             try:
                 r = await self.client.isle_read(turn['turn_id'], read)
                 if isinstance(r, dict) and r.get('ok') is not False:
-                    text = clip(r.get('text'), READ_TEXT_MAX) + (f'\n（还有下一页：再查一次，写 "page": "{clip(r.get("next"), 40)}"）' if r.get('next') else '')
+                    text = clip(r.get('text'), text_max(read)) + (f'\n（还有下一页：再查一次，写 "page": "{clip(r.get("next"), 40)}"）' if r.get('next') else '')
                     pics = pics_of(r)
                 else:
                     text = f"这次没查到：{clip((r or {}).get('text') if isinstance(r, dict) else '', 120) or '小镇没说为什么'}。就按你手上的情况拿主意。"

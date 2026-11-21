@@ -11,6 +11,7 @@ import time
 from . import events as ev
 from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
+from .build import SKIP, build_again, build_max_chars, build_note, build_prompt, build_within_s, is_build, read_build
 from .isle import Isle, PicsRefused, isle_version_of, isle_within_s, unattach
 from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
@@ -52,8 +53,9 @@ class Runner:
     # --- 一个回合 -------------------------------------------------------------------------------------------------------
     def left(self, turn: dict, received: float) -> float:
         """还剩几秒能答。deadline 是小镇的绝对时间；电脑时钟可能不准，再用「收到以后过了多久」兜底。
-        0.4.2：鱼缸岛上拿主意的回合小镇等 packet.isle.within_s（120 秒），留给一回合里先查再出手；本地上限比它早 2 秒。"""
-        within = isle_within_s(turn)
+        0.4.2：鱼缸岛上拿主意的回合小镇等 packet.isle.within_s（120 秒），留给一回合里先查再出手；本地上限比它早 2 秒。
+        0.4.4：建模回合也用回合自己的时限（没写就 120 秒，build.py）。"""
+        within = isle_within_s(turn) or build_within_s(turn)
         by_receipt = (within or POLL_WAIT) - (self.now() - received)
         try:
             by_deadline = float(turn.get('deadline') or 0) - self.now() if turn.get('deadline') else float('inf')
@@ -72,6 +74,9 @@ class Runner:
         try:
             if self.left(turn, received) < MIN_BUDGET:
                 self.stats['late'] += 1
+                return
+            if is_build(turn):   # 0.4.4 建模回合：她自己用模型把楼写成形状清单
+                await self._build(turn, received)
                 return
             j = self.journal
             if kind == 'agency':
@@ -223,7 +228,7 @@ class Runner:
             self.stats['last_turn_at'] = self.now()
         except asyncio.TimeoutError:
             self.stats['late'] += 1
-            await self._pass_activity(turn, received)
+            await self._pass_activity(turn, received, 'model')
         except TownError as error:
             if error.code == 'TOWN_OUTSIDE_TURN_CLOSED':
                 self.stats['closed'] += 1
@@ -236,7 +241,7 @@ class Runner:
             if self.running:
                 self.stats['errors'] += 1
                 self.log.warning(f'回合 {tid} 出错：{error!r}')
-            await self._pass_activity(turn, received)
+            await self._pass_activity(turn, received, 'error')
         finally:
             self.seen[tid] = 'done'
 
@@ -265,14 +270,53 @@ class Runner:
                     raise
                 await asyncio.sleep(1)
 
-    async def _pass_activity(self, turn: dict, received: float):
-        """活动回合（她在码头、小店……的一句话）这次答不上：还有时间就说 unsupported，小镇这句代写，不算她超时。"""
-        if turn.get('kind') != 'activity' or self.left(turn, received) + MARGIN < 0.8:
+    async def _pass_activity(self, turn: dict, received: float, why: str = 'invalid'):
+        """活动回合（她在码头、小店……的一句话）这次答不上：还有时间就说 unsupported，小镇这句代写，不算她超时。
+        0.4.4 建模回合答不上（她的模型超时、出错、答得读不了）：交 {"skip":true}——这次什么都不盖，插件和小镇都不替她建模，她以后可以再写一次想法。"""
+        if is_build(turn) and self.journal is not None:
+            try:
+                self.journal.event('build', build_note(turn, why=why))
+            except Exception:  # noqa: BLE001 - 记不上就算了
+                pass
+        if (turn.get('kind') != 'activity' and not is_build(turn)) or self.left(turn, received) + MARGIN < 0.8:
             return
         try:
-            await self.client.answer(turn['turn_id'], json.dumps({'unsupported': True}))
+            await self.client.answer(turn['turn_id'], SKIP if is_build(turn) else json.dumps({'unsupported': True}))
+            if is_build(turn):
+                self.log.info(f"建模回合 {turn['turn_id']}：她的模型这次没交上，告诉小镇这次不盖")
         except TownError:
             pass
+
+    async def _build(self, turn: dict, received: float):
+        """0.4.4 建模回合（build.py）：小镇的建模说明 + 她的想法交给她，她的模型答一次（读不了、太长时时间够就再问一次，和别的回合一样）。
+        只整理格式，不替她补形状；没答上就交 {"skip":true}（handle 外面的 except 也走 _pass_activity）。"""
+        tid = turn['turn_id']
+        mx = build_max_chars(turn)
+        prompt = build_prompt(turn, seconds_left=int(self.left(turn, received)))
+        raw = await self._ask(prompt, self.left(turn, received))
+        r = read_build(turn, raw)
+        if r['answer'] is None and self.left(turn, received) >= RETRY_MIN:
+            self.log.info(f"建模回合 {tid} 第一次的回答交不了（{r['why']}），追问一次")
+            raw = await self._ask(again_prompt(prompt, raw, build_again(r['why'], max_chars=mx, chars=r['chars'])), self.left(turn, received))
+            r = read_build(turn, raw)
+        if r['answer'] is None:
+            self.stats['invalid'] += 1
+            self.log.info(f"建模回合 {tid} 的回答交不了（{r['why']}），这次不盖")
+            await self._pass_activity(turn, received, 'invalid')
+            return
+        if self.left(turn, received) + MARGIN <= 0:
+            self.stats['late'] += 1
+            await self._pass_activity(turn, received, 'late')
+            return
+        await self._post(tid, r['answer'], turn, received)
+        try:
+            self.journal.event('build', build_note(turn, skip=bool(r.get('skip')), shapes=r['shapes']))
+        except Exception:  # noqa: BLE001 - 记不上就算了
+            pass
+        self.stats['builds'] = self.stats.get('builds', 0) + (0 if r.get('skip') else 1)
+        self.stats['answered'] += 1
+        self.stats['last_turn_at'] = self.now()
+        self.log.info(f"建模回合 {tid} 已交（{'她这次不盖' if r.get('skip') else str(r['shapes']) + ' 个形状，' + str(r['chars']) + ' 字'}）")
 
     # --- 循环 -----------------------------------------------------------------------------------------------------------
     async def _backoff(self, error: Exception) -> float:
