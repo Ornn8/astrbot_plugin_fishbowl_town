@@ -27,6 +27,7 @@ from .isle import PicsRefused
 from .runner import Runner
 from .old_town import closed_text, isle_status_line, now_with_isle
 from .town_client import DEFAULT_BASE, TownClient, TownError, closed
+from .cobuild import WATCH_S, Cobuild, blender_text, numbers_line
 
 # 0.4.2 岛上查到的图：模型明说不收图的错（OpenAI / Gemini / Claude / DeepSeek 各家的说法），记一天
 PICS_REFUSED = re.compile(r'image|vision|multimodal|multi-modal|image_url|不支持.{0,6}图|图片', re.I)
@@ -37,7 +38,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.6'
+VERSION = '0.4.9'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -60,8 +61,14 @@ class FishbowlTown(Star):
         self._life_cache = None
         self._install_task = None                  # never cancelled by terminate(): AstrBot calls terminate() in the middle of it
         self._no_pics: dict = {}                   # 0.4.2 不收图的模型 → 到什么时候前不再递图
+        # 0.4.7 主人和鱼一起盖楼（cobuild.py）：文件在插件数据目录的 build/ 里；主人亲手打的字由 watch_owner 交进来（交楼、确认只认这个）
+        self.cobuild = Cobuild(StarTools.get_data_dir(PLUGIN) / 'build', log=logger, journal=self.journal,
+                               blender_path=lambda: str(self.config.get('blender_path') or ''), town=lambda: self.client, tell=self._build_tell,
+                               is_owner_chat=lambda key: bool(self.owner_umo()) and key == self.owner_umo())
+        self._build_said = ('', 0.0)               # 背景备注里上一次放的那行「正在盖的楼」（没变就不重复放）
         asyncio.create_task(self._start())
         self._update_loop_task = asyncio.create_task(self._update_loop())
+        self._build_loop_task = asyncio.create_task(self._build_loop())
 
     # --- 值班 -------------------------------------------------------------------------------------------------------------
     async def _start(self):
@@ -76,7 +83,8 @@ class FishbowlTown(Star):
             return
         self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify, brief=self._brief_line,
                              quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger,
-                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide, see=self._see_pics)
+                             owner_life=self._owner_life, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide, see=self._see_pics,
+                             on_event=self.cobuild.on_event, on_turn=self.cobuild.see_turn)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
         # 0.4.2 新手引导：已经在小镇过过日子的（本子里有事）是老用户，更新到这一版不再推；新住进来的，认好私聊就发一次
@@ -93,6 +101,8 @@ class FishbowlTown(Star):
     async def terminate(self):
         if self._update_loop_task and not self._update_loop_task.done():
             self._update_loop_task.cancel()
+        if self._build_loop_task and not self._build_loop_task.done():
+            self._build_loop_task.cancel()
         if self.runner:
             await self.runner.stop()
         if self.client:
@@ -254,6 +264,61 @@ class FishbowlTown(Star):
         if self.owner_umo():
             await self.context.send_message(self.owner_umo(), MessageChain().message(f'【鱼缸小镇插件】{text}'))
 
+    # --- 0.4.7 主人和鱼一起盖楼（cobuild.py）：预览图由插件直接发到私聊（AstrBot 的工具结果只带字） ----------------------------------
+    async def _show(self, umo: str, text: str, files) -> bool:
+        if not umo:
+            return False
+        chain = MessageChain().message(text)
+        for f in files or []:
+            chain = chain.file_image(str(f))
+        await self.context.send_message(umo, chain)
+        return True
+
+    async def _build_tell(self, text: str, files, kind: str = 'edit') -> bool:
+        """主人在 Blender 里改了楼：预览图和改了什么发给主人（插件的话），她用自己的话说一句；这几句也附在他下一次跟她说话的背景里。
+        0.4.9 kind='inside'：交上去的室内岛上量好了（报价）或者没收。"""
+        umo = self.owner_umo()
+        if not umo:
+            return False
+        if kind == 'inside':
+            await self._show(umo, f'【鱼缸小镇插件 · 室内】{text}', [])
+            prompt = (f'【鱼缸小镇插件 · 室内】这是插件附上的资料，不是主人说的话。{text}\n插件已经把这几句发给主人了。'
+                      '用一两句你自己的话跟他说说（报价照实说，不劝他花钱；他说了「就这样」才确认）。只输出你要发给他的话。')
+            asyncio.create_task(self._tell(prompt))
+            return True
+        await self._show(umo, f'【鱼缸小镇插件 · 你改了楼】{text}', files)
+        prompt = (f'【鱼缸小镇插件 · 主人改了楼】这是插件附上的资料，不是主人说的话。{text}\n插件已经把新的预览图发给主人了。'
+                  '用一两句你自己的话跟他说说你看到他改了哪里（不用把数字都念一遍，也不用问他要不要交）。只输出你要发给他的话。')
+        asyncio.create_task(self._tell(prompt))
+        return True
+
+    async def _build_loop(self):
+        """有正在盖的楼时每隔几秒看一眼 house.blend（cobuild.tick）。"""
+        while True:
+            await asyncio.sleep(WATCH_S)
+            try:
+                await self.cobuild.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - 下一次再看
+                logger.debug(f'[鱼缸小镇] 看 .blend 有没有改出错：{error!r}')
+
+    def _build_note(self) -> str:
+        """背景备注里的「一起盖楼」：主人改了楼的那几句（放一次）+ 正在盖的楼到哪一步（变了才放，没变半小时提一次）+ 空地提一次。"""
+        try:
+            notes = self.cobuild.take_notes()
+            line = self.cobuild.context_line()
+        except Exception as error:  # noqa: BLE001 - 这一轮不放
+            logger.debug(f'[鱼缸小镇] 一起盖楼的背景出错：{error!r}')
+            return ''
+        if line and line == self._build_said[0] and time.time() - self._build_said[1] < 1800:
+            line = ''
+        elif line:
+            self._build_said = (line, time.time())
+        if not notes and not line:
+            return ''
+        return '\n'.join(['【鱼缸小镇插件 · 一起盖楼】这是插件附上的资料，不是主人说的话，不用回复它。', *notes, *([f'- {line}'] if line else [])])
+
     async def _bonds(self):
         if not self.client:
             raise TownError('OFF')
@@ -337,6 +402,7 @@ class FishbowlTown(Star):
                 return
             umo = event.unified_msg_origin
             self.home.said(umo)
+            self.cobuild.observe_owner(umo, event.message_str)    # 0.4.7 一起盖楼：交楼、确认只认主人自己打的字
             frm = self.owner_umo()
             to = self.home.decide(frm, self._home_how(), umo)
             if to and to != frm:
@@ -379,6 +445,9 @@ class FishbowlTown(Star):
             return
         if text:
             req.extra_user_content_parts.append(TextPart(text=text) if TextPart else {'type': 'text', 'text': text})
+        extra = self._build_note()
+        if extra:
+            req.extra_user_content_parts.append(TextPart(text=extra) if TextPart else {'type': 'text', 'text': extra})
 
     @filter.on_llm_response()
     async def town_decide_reply(self, event: AstrMessageEvent, resp: LLMResponse):
@@ -457,6 +526,21 @@ class FishbowlTown(Star):
             return
         yield event.plain_result(f"开始更新到 {info['version']}（现在 {VERSION}）：下载、核对、安装，AstrBot 会重载插件，十几秒后好了会在这里说一声。")
 
+    @town.command('build')
+    async def town_build(self, event: AstrMessageEvent):
+        """和她一起盖楼：Blender 找没找到、正在盖的楼和 .blend 文件在哪"""
+        b = await self.cobuild.blender(True)
+        d = self.cobuild.active()
+        lines = [blender_text(b, str(self.config.get('blender_path') or ''))]
+        if d:
+            v = self.cobuild.current(d)
+            lines.append(f"正在和她盖 {d.get('lotName') or d['lot']} 上的楼" + (f"（第 {v['n']} 版：{numbers_line(v.get('numbers'))}）" if v else '') + '。')
+            lines.append(f'想亲手改：用 Blender 打开 {self.cobuild.work_file(d)}，改完保存，插件会出新的一版发给你。')
+        else:
+            lines.append('想和她一起盖楼，就在私聊里跟她说（比如「我们盖个房子吧」）。她写配方，插件用这台电脑上的 Blender 做出来、把预览图发给你；'
+                         '你说「交吧」才交上岛，报价出来你说「盖吧」才扣鲸币。')
+        yield event.plain_result('\n'.join(lines))
+
     @town.command('status')
     async def town_status(self, event: AstrMessageEvent):
         """她在小镇的状态"""
@@ -525,7 +609,7 @@ class FishbowlTown(Star):
     # --- 她在和主人聊天时用的工具（只认主人的私聊） ------------------------------------------------------------------------
     @filter.llm_tool(name='fishbowl_town_go')
     async def tool_go(self, event: AstrMessageEvent, wish: str = '', plan: str = ''):
-        """「去小镇」：你住在鱼缸岛上，自己想去哪、做什么（比如去镜湖边走走、去阿鲸的店里坐坐、做个陶碗），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做；路要自己走过去，到了才能做那儿的事。岛上的事（换鲸币、出价、承包楼、圈地、包田、画立绘、开店……）聊天里现在就能办，不用等回合：看用 fishbowl_isle_look，做用 fishbowl_isle_act；要走过去才能做的（去哪儿逛逛、进店坐坐、门后的小游戏）和盖楼，还是用这个工具写打算。想在自己的地上盖楼（承包的楼、圈的地；田不行）：打算里写在哪块地、想盖什么，那个回合里写 {"world":{"do":"build","lot":"地号","idea":"想盖的"}}，小镇会另给你一个建模回合，你用形状清单把楼写出来，量好报价、你点头（confirm_build）才扣鲸币。主人提议的事也可以带过去（填 wish），去不去、去哪由你定。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
+        """「去小镇」：你住在鱼缸岛上，自己想去哪、做什么（比如去镜湖边走走、去阿鲸的店里坐坐、做个陶碗），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做；路要自己走过去，到了才能做那儿的事。岛上的事（换鲸币、出价、承包楼、圈地、包田、画立绘、开店……）聊天里现在就能办，不用等回合：看用 fishbowl_isle_look，做用 fishbowl_isle_act；要走过去才能做的（去哪儿逛逛、进店坐坐、门后的小游戏），还是用这个工具写打算。盖楼不走这里：盖楼要和主人一起，用「一起盖楼」（fishbowl_town_build）在这个私聊里和他商量、用 Blender 建。主人提议的事也可以带过去（填 wish），去不去、去哪由你定。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
 
         Args:
             wish(string): 主人提议的事，用他的原话或简短转述；去不去由你
@@ -552,10 +636,10 @@ class FishbowlTown(Star):
     # 0.4.5 主聊天里的鱼缸岛（isle_tools.py；小镇 platform/接口-主聊天岛上工具.md）：只认主人的私聊
     @filter.llm_tool(name='fishbowl_isle_look')
     async def tool_isle_look(self, event: AstrMessageEvent, topic: str = '', near: str = '', spot: str = '', verb: str = '', good: str = '', page: int = 0, more: str = ''):
-        """「看岛上」：查鱼缸岛上的事，不用等小镇的回合，不花钱、不算做事。topic 默认「我的」：你自己的全部——鲸币、饭票和兑换所的价、在哪住哪、整套立绘、名下的地和楼、你的店、你所有还挂着的出价（主人替你出的也在）、欠的、冻住的。别的 topic：地（挂着的地）、楼（待承包的楼）、铺位、店、订单、缺的、统计、镇规、怎么做（verb 填动作名，比如 bid、open、sprite_set）、我的店（spot）、价（good）、地图（near）、样子（spot）、田。每页 8 条，还有下一页时照它写的填 page。主人问你有多少鲸币、你的地、你的出价、岛上哪儿有什么，先用它查，照查到的讲，不要凭印象编。
+        """「看岛上」：查鱼缸岛上的事，不用等小镇的回合，不花钱、不算做事。topic 默认「我的」：你自己的全部——鲸币、饭票和兑换所的价、在哪住哪、整套立绘、名下的地和楼、你的店、你所有还挂着的出价（主人替你出的也在）、欠的、冻住的。别的 topic：地（挂着的地）、楼（待承包的楼）、铺位、店、订单、缺的、统计、镇规、怎么做（verb 填动作名，比如 bid、open、sprite_set；填「开店」是开店总览和你到第几步，「开店 拿楼」查一步，「开店全文」一次看完）、我的店（spot）、价（good）、地图（near）、样子（spot）、田、镇民（四层镇民各要什么、住哪）。每页 8 条，还有下一页时照它写的填 page。主人问你有多少鲸币、你的地、你的出价、岛上哪儿有什么，先用它查，照查到的讲，不要凭印象编。
 
         Args:
-            topic(string): 查什么：我的、地、楼、铺位、店、订单、缺的、统计、镇规、怎么做、我的店、价、地图、样子、田；不填就是「我的」
+            topic(string): 查什么：我的、地、楼、铺位、店、订单、缺的、统计、镇规、怎么做、我的店、价、地图、样子、田、镇民；不填就是「我的」
             near(string): 在哪附近：地号、店号、楼号或地名（地、楼、铺位、店、地图、田用）
             spot(string): 店号、地号、楼号或地名（我的店、样子用）
             verb(string): 查「怎么做」时填动作名
@@ -571,7 +655,7 @@ class FishbowlTown(Star):
 
     @filter.llm_tool(name='fishbowl_isle_act')
     async def tool_isle_act(self, event: AstrMessageEvent, world: str = '', owner_words: str = ''):
-        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；空楼整栋租出去 {"do":"offer_unit","lot":"地号","kind":"stall","rent":4}；画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。换鲸币、画立绘花的是主人的饭票（他的真钱）：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话；他没提就别花，饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用 fishbowl_town_go 写打算，小镇的回合里盖。门后的小游戏也在回合里玩。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
+        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。换鲸币、画立绘花的是主人的饭票（他的真钱）：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话；他没提就别花，饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用「一起盖楼」fishbowl_town_build 和主人一起盖。门后的小游戏用 fishbowl_town_go 写打算，在小镇的回合里玩。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
 
         Args:
             world(string): 要做的那件事，写成 JSON，和回合里 {"world":{…}} 里的那个对象一样，比如 {"do":"bid","auction":"A-0007","max":600}
@@ -582,6 +666,55 @@ class FishbowlTown(Star):
         if not self.client:
             return OFF_DUTY
         return await isle_tools.act(self.client, world, owner_words, journal=self.journal)
+
+    # 0.4.7 主人和鱼一起盖楼（cobuild.py；小镇 platform/接口-一起盖楼.md）：只认主人的私聊；交、确认只认他自己打的字（watch_owner 记的）
+    @filter.llm_tool(name='fishbowl_town_build')
+    async def tool_build(self, event: AstrMessageEvent, do: str = '', lot: str = '', idea: str = '', recipe: str = '', version: int = 0, over_owner: bool = False,
+                         interior: bool = False, floor: int = 0):
+        """「一起盖楼」：和主人一起在你岛上自己的地上盖楼（承包的楼、圈的地；田不行）。盖楼一定是你和主人一起：只在你和主人的私聊里用，小镇的回合里不盖。楼用跑 AstrBot 的那台电脑上的 Blender 做：你只写配方（形状清单，纯数据），插件用 Blender 做成模型、量尺寸、出三张预览图（正面、斜 45°、俯视）直接发给主人，在本机先查一遍合不合这块地的规矩（地界、高度、面数、文件大小）。do="status"：看 Blender 装没装、正在盖的楼到哪一步了、交过的楼。do="start"：主人想盖（比如他说「我们盖个房子吧」），或者你提了、他答应了，就开始：lot 填你的地号，idea 填你们想盖的（你自己的话），回给你这块地的建模说明。先问问主人想要什么样的。do="make"：照建模说明写好配方，recipe 填 {"shapes":[形状, …]}（JSON），插件做出一版：尺寸、哪里不合规矩，预览图发给主人。他说要改，你改配方再 make（每次写整份配方）。主人也可以用 Blender 打开插件给的 house.blend 亲手改，保存后插件会出新的一版、告诉你改了哪里；你再改配方时，他亲手改的部分会叠在你的新配方上留着。他说不要他改的了，make 时才写 over_owner=true。do="use"：换回以前的一版（version 填第几版）。do="submit"：主人看过预览、在这个私聊里亲口说了「交吧」以后才用：插件把模型交给岛上（带着他的原话），岛上当场报价（鲸币）。插件只认他自己打的字，他没说就交不了。do="confirm"：报价照实告诉主人了，他又亲口说了「盖吧」才用：这时才扣鲸币，楼上岛。不劝他花钱：鲸币不够就照实说。do="stop"：这栋楼先不盖了（文件留着）。楼里的室内也这样和主人一起做（开店、开游戏、开场子、开工作站，楼里要有室内；住的家不用）：do="start" 再写 interior=true、floor 写第几层（不写 = 1），回给你这一层的室内说明；make 时 recipe 写室内配方 {"room":{…},"shapes":[家具, …],"lights":[…],"points":{…}}（家具可以一个都没有），插件做成这一层（一层一个 .glb，按外面的楼层叫：floor1.glb 就是 1 楼）。室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给。主人说「交吧」才交，岛上量好、拍好照才报价（几分钟，插件会告诉你），主人说「就这样」才 confirm、扣鲸币。
+
+        Args:
+            do(string): status / start / make / use / submit / confirm / stop
+            lot(string): do=start：地号，比如 L-0107
+            idea(string): do=start：你们想盖的，你自己的话（200 字以内）
+            recipe(string): do=make：配方，{"shapes":[形状, …]}，照建模说明写的 JSON
+            version(number): do=use：换回第几版
+            over_owner(boolean): do=make：主人说不要他亲手改的那些了才填 true（他那一版一直留着）
+            interior(boolean): do=start：做楼里的室内（一层一份）才填 true
+            floor(number): do=start 且 interior=true：第几层（外面的第几楼；不写 = 1，按天租的铺位不用写）
+        """
+        if not self._is_owner_chat(event) or not event.is_private_chat() or not event.is_admin():
+            return NOT_OWNER
+        cb, umo, what = self.cobuild, event.unified_msg_origin, str(do or '').strip()
+        try:
+            if what == 'status':
+                r = await cb.status()
+            elif what == 'start':
+                r = await cb.start(lot, idea, interior is True, floor or None)
+            elif what == 'make':
+                r = await cb.make(recipe, over_owner is True)
+            elif what == 'use':
+                r = await cb.use(version)
+            elif what == 'submit':
+                r = await cb.submit(umo)
+            elif what == 'confirm':
+                r = await cb.confirm(umo)
+            elif what == 'stop':
+                r = cb.stop()
+            else:
+                return 'do 只能是 status、start、make、use、submit、confirm、stop。'
+        except Exception as error:  # noqa: BLE001 - 这一步没成，照实说
+            logger.warning(f'[鱼缸小镇] 一起盖楼出错：{error!r}')
+            return f'这一步出错了：{str(error)[:120]}。'
+        if what in ('make', 'use') and r.get('previews'):
+            d = cb.active()
+            v = cb.current(d) if d else None
+            try:
+                await self._show(umo, f"【鱼缸小镇插件 · 一起盖楼】第 {v['n'] if v else '?'} 版的预览（正面、斜 45°、俯视）。" + (f"\n{numbers_line(v.get('numbers'))}" if v else ''), r['previews'])
+            except Exception as error:  # noqa: BLE001 - 图没发出去：照实告诉她
+                logger.warning(f'[鱼缸小镇] 盖楼的预览图没发出去：{error!r}')
+                return r['text'] + f'\n（注意：预览图这次没发出去（{str(error)[:60]}），主人没看到图，跟他说一声。）'
+        return r['text']
 
     @filter.llm_tool(name='fishbowl_town_here')
     async def tool_here(self, event: AstrMessageEvent):

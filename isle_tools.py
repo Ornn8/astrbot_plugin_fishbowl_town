@@ -6,7 +6,7 @@ DSH 插件 lib/isle-tools.js 的 Python 版）。岛上的事原来只能在小�
 两个口子除了接入码不对、小镇没开外来的鱼、小镇太忙，都回 200 {ok, code, text}：text 原样给她。
 旧小镇没有这两个口子（404）：照实说还没开，指回「去小镇」（把打算带进回合里办），不报错。
 花主人饭票（真钱）的两件事（fx_buy 换鲸币、sprite_set 画整套立绘）：要主人在这段聊天里叫她做或点了头，owner_words 填他的原话，没有就不发。
-盖楼不在这里（小镇回 cobuild）：插件先接住，指回「去小镇」的回合里盖（0.4.4 的建模回合）。
+盖楼不在这里（小镇回 cobuild）：插件先接住，指到「一起盖楼」（0.4.7 fishbowl_town_build：和主人一起，用 Blender 建，cobuild.py）。
 看图：AstrBot 的工具结果只带字（图递不到她的模型），地图、样子这两页只给她图上画的是什么。"""
 from __future__ import annotations
 
@@ -18,24 +18,30 @@ import time
 from .isle import NO_PICS_HEAD, CIRCLED, pics_of
 from .town_client import TownError
 
-LOOK_TOPICS = ('我的', '地', '楼', '铺位', '店', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田')
+LOOK_TOPICS = ('我的', '地', '楼', '铺位', '店', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田', '镇民')   # 0.4.9：镇民（小镇 11-24 四层镇民）
 OWNER_MONEY = ('fx_buy', 'sprite_set')          # 花主人饭票（真钱）的：要他在聊天里叫她做或点了头
 COBUILD = ('build', 'build_guide', 'confirm_build')
 TOPIC_ZH = {'我的': '你自己的', '地': '挂着的地', '楼': '待承包的楼', '铺位': '空铺位', '店': '开着的店', '订单': '接力订单', '缺的': '最缺的',
-            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子', '田': '田'}
+            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子', '田': '田', '镇民': '镇民'}
 VERB_ZH = {
     'fx_buy': '换鲸币', 'fx_sell': '卖鲸币', 'fx_cancel': '撤卖鲸币的单', 'bid': '出价', 'withdraw': '撤回出价', 'claim': '圈地', 'confirm_claim': '递圈地申请',
     'take_building': '承包楼', 'field_take': '包田', 'field_quote': '问田的价', 'plant': '种地', 'harvest': '收庄稼', 'field_release': '退田', 'lease_building': '租铺位',
-    'rent_unit': '租楼', 'offer_unit': '把楼租出去', 'live': '搬进自己的楼', 'open': '开店', 'shop': '经营店', 'fund': '往店里放鲸币', 'facade': '改门面',
+    'rent_unit': '租床位或整栋楼', 'offer_unit': '把楼租出去', 'live': '住进一栋楼', 'open': '开店', 'shop': '经营店', 'fund': '往店里放鲸币', 'facade': '改门面',
     'sprite_set': '画整套立绘', 'sprite_tall': '改身高', 'walk': '走过去', 'sign_up': '报名活动', 'borrow': '借鲸币', 'repay': '还鲸币', 'demolish': '拆楼',
 }
 TEXT_MAX = 1500
+FULL_MAX = 6000                  # 「怎么做」里的全文（开店、写程序、建模）岛上一次给全，这里也不截（0.4.9）
+# 0.4.9 开店、住、出租（主人 11-23「开店说明要写清楚在插件里」「产业链很重要」）：说明里只放一句指路（120 字内），岛上一层一层给：
+# 「开店」总览 + 她到第几步，「开店 拿楼」查一步，「开店全文」一次看完。这一句原样写在 main.py「在岛上做一件事」的说明里
+# （AstrBot 的工具说明是函数的文档字符串，只能写字面的；测试查两边一字不差），和 DSH 插件 lib/isle-tools.js 的 GUIDE_POINTER 也一字不差。
+# 0.4.9 小镇 11-24：新开的店楼里要先有室内（岛上 doorway.need），说明里一句说清，免得她承包了楼才发现开不了；怎么做室内在岛上查。
+GUIDE_POINTER = '开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。'
 WORDS_MAX = 200
 RETRY_S = 2.0
 
 NOT_YET = '小镇那边还没开这个（主聊天里看岛上、在岛上做事，要等小镇更新）。现在想在岛上看什么、做什么，用 fishbowl_town_go 把打算写下，小镇给你的回合里去办。'
-BUILD_HERE = ('盖楼不在这里做：用 fishbowl_town_go 写下打算（在哪块地、想盖什么），小镇给你的回合里写 {"world":{"do":"build","lot":"地号","idea":"想盖的"}}，'
-              '会另给你一个建模回合；量好报价、你点头（confirm_build）才扣鲸币。')
+BUILD_HERE = ('盖楼不在这里做，也不在小镇的回合里做：盖楼要和主人一起，用「一起盖楼」fishbowl_town_build（do="start"、lot 填地号）在这个私聊里和他商量，'
+              '插件用 Blender 做出来、把预览图发给他看；他说「交吧」才交上岛，报价出来他说「盖吧」才扣鲸币。楼里的室内也一样（do="start" 再写 interior=true、floor 第几层）。')
 HONEST = '（这是岛上刚回你的原话。办成了就照这句告诉主人；没办成就照实说没办成、为什么，别说成办了。）'
 
 
@@ -125,7 +131,7 @@ async def look(client, read: dict) -> str:
         return f"没查到：{clip(r.get('text') or r.get('code') or '岛上没说为什么', TEXT_MAX)}{old}"
     pics = pics_of(r)
     note = '\n'.join(['', '', NO_PICS_HEAD, *[f'{CIRCLED[k]} {p["alt"] or "（没写画的是什么）"}' for k, p in enumerate(pics)]]) if pics else ''
-    return f"【岛上 · {TOPIC_ZH.get(read['topic'], read['topic'])}】\n{clip(r.get('text') or '（这一页是空的）', TEXT_MAX)}{note}"
+    return f"【岛上 · {TOPIC_ZH.get(read['topic'], read['topic'])}】\n{clip(r.get('text') or '（这一页是空的）', FULL_MAX if read.get('topic') == '怎么做' else TEXT_MAX)}{note}"
 
 
 async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.sleep) -> str:

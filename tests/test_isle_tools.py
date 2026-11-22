@@ -60,7 +60,7 @@ def tool_doc(name):
 
 
 def test_the_two_tools_are_owner_only_main_chat_tools_with_the_doc_topics():
-    assert T.LOOK_TOPICS == ('我的', '地', '楼', '铺位', '店', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田')
+    assert T.LOOK_TOPICS == ('我的', '地', '楼', '铺位', '店', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田', '镇民')   # 0.4.9：镇民（小镇 11-24）
     for name in ('fishbowl_isle_look', 'fishbowl_isle_act'):
         doc, body = tool_doc(name)
         assert 'if not self._is_owner_chat(event):\n            return NOT_OWNER' in body, name
@@ -176,7 +176,29 @@ def test_her_owners_money_only_with_his_words_and_building_is_not_here():
     assert len(c.acts) == 2
     for verb in ('build', 'build_guide', 'confirm_build'):
         assert run(T.act(c, json.dumps({'do': verb, 'lot': 'L-1'}))) == T.BUILD_HERE
-    assert 'fishbowl_town_go' in T.BUILD_HERE
+    assert 'fishbowl_town_build' in T.BUILD_HERE and '交吧' in T.BUILD_HERE and '盖吧' in T.BUILD_HERE
     assert 'fishbowl_isle_look' in run(T.act(c, '{"do":"look","topic":"地"}'))
     assert 'world 填' in run(T.act(c, '{}'))
     assert len(c.acts) == 2
+
+
+ACT_DOC_047 = 1289                # 0.4.7 的「在岛上做一件事」说明有多长：0.4.9 只多一句指路（120 字内），开店、住、出租的细节都在岛上一层一层查
+
+
+def test_048_act_carries_only_a_short_shop_homes_pointer_and_how_to_comes_back_uncut():
+    doc, _ = tool_doc('fishbowl_isle_act')
+    assert len(T.GUIDE_POINTER) <= 120, len(T.GUIDE_POINTER)
+    assert T.GUIDE_POINTER in doc                                        # 文档字符串里一字不差
+    assert T.GUIDE_POINTER == ('开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。'
+                               '一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。')     # 和 DSH 插件 lib/isle-tools.js 的 GUIDE_POINTER 一字不差
+    assert len(doc) <= ACT_DOC_047 + 120, len(doc)
+    for w in ('最多 12', '销毁', '"kind":"bed"', '原料只在产地出'):                 # 细节不在说明里：在岛上查
+        assert w not in doc, w
+    look_doc, _ = tool_doc('fishbowl_isle_look')
+    assert '填「开店」是开店总览和你到第几步，「开店 拿楼」查一步，「开店全文」一次看完' in look_doc
+    for verb in ('开店', '开店 拿楼', '开店全文'):
+        c = Client(look={'ok': True, 'topic': '怎么做', 'text': verb + '：' + '一' * 3200, 'next': None})
+        out = run(T.look(c, T.read_of('怎么做', verb=verb)))
+        assert (verb + '：') in out and out.endswith('一' * 50) and '…' not in out, verb     # 不在 1500 字截断
+    c = Client(look={'ok': True, 'topic': '地', 'text': '二' * 3200, 'next': None})
+    assert run(T.look(c, T.read_of('地'))).endswith('…')                  # 别的页照旧截

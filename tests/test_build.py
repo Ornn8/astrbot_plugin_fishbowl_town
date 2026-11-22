@@ -96,7 +96,7 @@ def test_no_style_or_look_advice_anywhere_the_plugin_talks_about_building():
 def test_island_decision_turns_say_how_to_build():
     isle = {'turn_id': 'i', 'kind': 'agency', 'packet': {'isle': {'static': 'a1b2c3d4e5f6', 'within_s': 120}, 'messages': [], 'reply': {'format': 'json'}}}
     assert ISLE_BUILD_NOTE in build_turn_prompt(isle, seconds_left=110)
-    assert '"do":"build","lot":"地号","idea"' in ISLE_BUILD_NOTE and '"verb":"建模"' in ISLE_BUILD_NOTE
+    assert '要和主人一起盖' in ISLE_BUILD_NOTE and '"do":"build","lot"' not in ISLE_BUILD_NOTE and '"verb":"建模"' in ISLE_BUILD_NOTE   # 0.4.7：回合里不盖楼
     assert ISLE_BUILD_NOTE not in build_turn_prompt({'turn_id': 'p', 'kind': 'agency', 'packet': {'messages': [], 'reply': {'format': 'json'}}})
 
 

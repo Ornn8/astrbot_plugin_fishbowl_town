@@ -12,6 +12,7 @@ KIND_ZH = {
     'town_notice': '小镇公告', 'auto_move': '有一步是小镇替她走的', 'buddy': '有镇民带她熟悉小镇', 'tie': '约好了一件事', 'tie_due': '约好的事快到了',
     'missed_you': '她不在时有人想她', 'signup': '报名', 'self_play': '自己开了一桌', 'outside_receipt': '小镇替她办的事', 'social': '为朋友花钱',
     'media': '照片 · 歌 · 画', 'phone': '小手机', 'town_news': '镇上的消息',
+    'isle_build': '盖楼',       # 0.4.7 和主人一起盖的楼（岛上报了价 / 楼上岛了）
 }
 QUIET = {'outside_fee', 'ad', 'outside_ghost'}
 # 哪些事算「你刚才在小镇」（主人下次开口时补一小段）

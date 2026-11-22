@@ -131,10 +131,10 @@ class TownClient:
         if self._own and self._session is not None and not self._session.closed:
             await self._session.close()
 
-    async def request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15):
+    async def request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15, form=None):
         if core_path(path):
             try:
-                return await self._request(method, path, query=query, body=body, timeout=timeout)
+                return await self._request(method, path, query=query, body=body, timeout=timeout, form=form)
             except TownError as error:          # 小镇在重启 / 连不上：重启以后各块可能又开了，记着的「关了」作废
                 if error.code == 'NETWORK' or error.status >= 500:
                     self.shut.clear()
@@ -144,21 +144,31 @@ class TownClient:
         if was and was[0] > time.monotonic():            # 刚说过关了：不再去问
             raise TownError(was[1].code, was[1].status, was[1].reason, 0, was[1].data)
         try:
-            return await self._request(method, path, query=query, body=body, timeout=timeout)
+            return await self._request(method, path, query=query, body=body, timeout=timeout, form=form)
         except TownError as error:
             if closed(error):
                 self.shut[part] = (time.monotonic() + CLOSED_S, error)
             raise
 
-    async def _request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15):
+    async def _request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15, form=None):
         params = {k: str(v) for k, v in (query or {}).items() if v is not None}
-        headers = {'Authorization': self.auth, 'User-Agent': self.ua, **({'Content-Type': 'application/json'} if body is not None else {})}
+        headers = {'Authorization': self.auth, 'User-Agent': self.ua, **({'Content-Type': 'application/json'} if body is not None and form is None else {})}
+        # form：multipart（0.4.7 交楼的 glb），fields = [(名字, 值, 文件名, 类型)]；每次请求现做一份（aiohttp 的 FormData 只能发一次）
+        data = None
+        if form is not None:
+            data = aiohttp.FormData()
+            for name, value, filename, ctype in form:
+                if filename:
+                    data.add_field(name, value, filename=filename, content_type=ctype)
+                else:
+                    data.add_field(name, str(value))
+        elif body is not None:
+            data = json.dumps(body, ensure_ascii=False).encode()
         http = await self._http()
         root = self.root
         answered = False                              # 收到回应了没有（收到以后再断的不算入口机连不上）
         try:
-            async with http.request(method, root + path, params=params, headers=headers,
-                                    data=json.dumps(body, ensure_ascii=False).encode() if body is not None else None,
+            async with http.request(method, root + path, params=params, headers=headers, data=data,
                                     timeout=aiohttp.ClientTimeout(total=timeout)) as res:
                 answered = True
                 self._reached(root)
@@ -241,6 +251,50 @@ class TownClient:
     async def isle_act(self, world: dict, ref: str = ''):
         """现在做一件岛上的事：world 和回合里写的一样；ref = 插件起的单号（同一个 ref 岛上只办一次）。→ {ok, do, code, text, ref, receipt, detail?}。"""
         return await self.request('POST', 'isle/act', body={'world': world, **({'ref': ref} if ref else {})}, timeout=30)
+
+    # 0.4.7 主人和鱼一起盖楼（cobuild.py；小镇 platform/接口-一起盖楼.md §1）：都回 200 {ok, code, text, …}
+    async def isle_build_guide(self, lot: str):
+        """这块地的建模说明 + 上限 + 给 recipe_to_blend.py 的 lot.json。→ {ok, lot, lot_name, text, limits, types, materials, lot_json}。"""
+        return await self.request('GET', 'isle/build_guide', query={'lot': lot}, timeout=15)
+
+    async def isle_build(self, lot: str, idea: str, owner_words: str, glb: bytes, door: dict | None = None):
+        """交主人点头的 glb（multipart：lot、idea、owner_words、file；0.4.9 起带配方里的正门 door），岛上当场报价。→ {ok, build_id, quote{coin, upkeep_day_coin, lines…}, …}。"""
+        form = [('lot', str(lot), None, None), ('idea', str(idea or ''), None, None), ('owner_words', str(owner_words or ''), None, None)]
+        if isinstance(door, dict) and isinstance(door.get('side'), str):
+            try:
+                at = float(door.get('at') or 0)
+            except (TypeError, ValueError):
+                at = 0.0
+            form.append(('door', json.dumps({'side': door['side'], 'at': at}, ensure_ascii=False), None, None))
+        form.append(('file', bytes(glb), 'house.glb', 'model/gltf-binary'))
+        return await self.request('POST', 'isle/build', form=form, timeout=120)
+
+    # 0.4.9 一层室内（室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给）
+    async def isle_interior_guide(self, lot: str, floor: int | None = None):
+        """这一层的室内说明：{ok, lot, lot_name, floor, floors, text, room_json（存成 --room 的文件）, limits, door}。"""
+        return await self.request('GET', 'isle/interior_guide', query={'lot': lot, 'floor': floor if floor else None}, timeout=15)
+
+    async def isle_interior(self, lot: str, floor: int, idea: str, owner_words: str, glb: bytes, name: str = 'floor1.glb'):
+        """交一层（multipart：lot、floor、idea、owner_words、file）。→ {ok, code: measuring, iid, floor, floors, text}（量好、拍好照才报价）。"""
+        form = [('lot', str(lot), None, None), ('floor', str(floor or 1), None, None), ('idea', str(idea or ''), None, None),
+                ('owner_words', str(owner_words or ''), None, None), ('file', bytes(glb), str(name), 'model/gltf-binary')]
+        return await self.request('POST', 'isle/interior', form=form, timeout=120)
+
+    async def isle_interior_confirm(self, body: dict):
+        """主人说了「就这样」：{iid, owner_words} → {ok, code: placed | checking, paid_coin, text}。"""
+        return await self.request('POST', 'isle/interior/confirm', body=body, timeout=60)
+
+    async def isle_interiors(self):
+        """插件交过的室内（最近 6 件）：{ok, interiors: [{iid, state, coin, upkeep_day_coin, lines, area_m2, rooms, problems, lot, lot_name, floors, at}]}。"""
+        return await self.request('GET', 'isle/interiors', timeout=8)
+
+    async def isle_build_confirm(self, body: dict):
+        """主人说了「盖吧」：{build_id, owner_words} → {ok, paid_coin, upkeep_day_coin, …}。"""
+        return await self.request('POST', 'isle/build/confirm', body=body, timeout=20)
+
+    async def isle_builds(self):
+        """插件交过的楼（最近 6 件）。"""
+        return await self.request('GET', 'isle/builds', timeout=8)
 
     @staticmethod
     def pic_url_on(base: str, url: str) -> str | None:

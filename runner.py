@@ -32,8 +32,9 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 class Runner:
     def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time,
-                 owner_life=None, on_echo=None, recap=lambda: True, decide=None, see=None):
+                 owner_life=None, on_echo=None, recap=lambda: True, decide=None, see=None, on_event=None, on_turn=None):
         self.client, self.journal, self.ask = client, journal, ask
+        self.on_event, self.on_turn = on_event, on_turn   # 0.4.7 一起盖楼（cobuild.py）：isle_build 事件、回合里看到的空地
         self.see = see                # 0.4.2 看图：查到的图能不能附给她（main._see_pics）
         self.decide = decide          # 0.4.0「主聊天拿主意」（chat_decide.ChatDecide）
         self.tell, self.notify, self.brief = tell, notify, brief
@@ -71,6 +72,11 @@ class Runner:
     async def handle(self, turn: dict, received: float):
         self.stats['turns'] += 1
         tid, kind = turn['turn_id'], turn.get('kind')
+        if self.on_turn is not None:
+            try:
+                self.on_turn(turn)        # 0.4.7 一起盖楼：只是看一眼她有没有空地
+            except Exception:  # noqa: BLE001
+                pass
         try:
             if self.left(turn, received) < MIN_BUDGET:
                 self.stats['late'] += 1
@@ -384,6 +390,11 @@ class Runner:
         for it in items:
             self.stats['events'] += 1
             kind = str(it.get('kind') or '')
+            if self.on_event is not None:
+                try:
+                    self.on_event(it)     # 0.4.7 一起盖楼：楼盖好了（主人在账户页点了确认也算）
+                except Exception:  # noqa: BLE001
+                    pass
             d = it.get('data') if isinstance(it.get('data'), dict) else None
             # 超时代打的一手记到那局上；一局打完，结果后面带上那边替她出了几手、超时几手，本子里另记一行每一手
             if kind == 'outside_turn' and d and d.get('what') == 'timeout' and d.get('ref'):

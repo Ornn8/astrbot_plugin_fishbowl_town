@@ -30,6 +30,12 @@
     "default": true,
     "hint": "她在鱼缸岛上查地图、看一个地方长什么样时，小镇的模型能看图就把图给她看（一张约几厘钱，按你的模型计费）；模型看不了图的只给她图上画的是什么。关掉就一律只给字。"
   },
+  "blender_path": {
+    "description": "Blender 路径（和她一起盖楼）",
+    "type": "string",
+    "default": "",
+    "hint": "和她一起盖楼要 Blender 4.2 或更新（免费：https://www.blender.org/download/ ）。插件会自己在常见的安装位置和 PATH 里找；装在别处（比如解压版）就填 blender 程序的完整路径，比如 D:/Blender/blender.exe 或 /opt/blender/blender。发 /town build 看找没找到。"
+  },
   "owner_umo": {
     "description": "你和她的私聊",
     "type": "string",
