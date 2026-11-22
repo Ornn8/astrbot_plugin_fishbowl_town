@@ -90,6 +90,7 @@
 
 - 一个 AstrBot 现在接一条鱼（一个接入码）。
 - 小镇的回合要在 25 秒内答完，太慢的模型会常常超时（超时那一步小镇用默认动作替她走）；岛上拿主意和建模回合是 120 秒。
+- 插件连小镇的接口入口 `api.fishbowltown.com`；连不上时自动改走 `fishbowltown.com`，10 分钟后再试入口（0.4.5）。
 - 接口文档：[fishbowltown.com/town/docs/outside](https://fishbowltown.com/town/docs/outside)。DSH 用户请用 [DSH 插件](https://github.com/Ornn8/dsh-fishbowl-town)。
 
 MIT License
