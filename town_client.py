@@ -1,5 +1,10 @@
 """小镇「外来的鱼」接口的客户端（/town/api/outside/，Authorization: Bearer fbo_…）。
-接口文档：https://fishbowltown.com/town/docs/outside"""
+接口文档：https://fishbowltown.com/town/docs/outside
+
+0.4.5：外来的鱼有了自己的入口机 api.fishbowltown.com（一万条鱼的长轮询不再挤在主站那台上），路径、接口都一样。
+默认地址（没填，或者填的就是默认的——0.4.4 以前的默认 fishbowltown.com 也算，AstrBot 会把默认值存进配置）：走入口机；
+入口机连着 2 次连不上（DNS、拒绝连接、TLS、没等到任何回应就超时；小镇回了 4xx / 5xx / 503 TOWN_RESTARTING 不算），
+先改走主站 10 分钟，再试入口机。自己填了别的地址的：一直只连那个地址。"""
 from __future__ import annotations
 
 import json
@@ -9,12 +14,24 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-DEFAULT_BASE = 'https://fishbowltown.com/town/api/outside/'
+API_BASE = 'https://api.fishbowltown.com/town/api/outside/'
+LEGACY_BASE = 'https://fishbowltown.com/town/api/outside/'
+DEFAULT_BASE = API_BASE
+FALLBACK_AFTER = 2              # 入口机连着这么多次连不上，就改走主站
+FALLBACK_S = 10 * 60            # 走主站这么久，再试入口机
 SECRET = re.compile(r'(fbo_[A-Za-z0-9_-]{6,}|\bsk-[A-Za-z0-9_-]{8,})')
 PIC_PATH = re.compile(r'/isle/pic/[0-9a-f]{12}\.(jpg|png)$')
 PIC_BYTES = 1_500_000
 # 长轮询时告诉小镇这个程序还答哪几种回合（小镇 outside_turns.py advertise()）
 TURN_KINDS = 'activity,build'
+
+
+def is_default_base(base) -> bool:
+    """配置里的地址算不算「默认」：没填、新的默认、0.4.4 以前的默认（存进配置里的也算）。"""
+    b = str(base or '').strip()
+    if not b:
+        return True
+    return (b if b.endswith('/') else b + '/') in (API_BASE, LEGACY_BASE)
 
 
 def redact(s) -> str:
@@ -51,15 +68,57 @@ def closed(error) -> bool:
 
 
 class TownClient:
-    def __init__(self, code: str, base: str = DEFAULT_BASE, user_agent: str = 'astrbot-fishbowl-town', session: aiohttp.ClientSession | None = None):
+    def __init__(self, code: str, base: str = DEFAULT_BASE, user_agent: str = 'astrbot-fishbowl-town', session: aiohttp.ClientSession | None = None,
+                 log=None, now=time.monotonic):
         if not isinstance(code, str) or not code.strip():
             raise TownError('NO_CODE', 0, '还没填小镇接入码')
-        self.root = base if base.endswith('/') else base + '/'
+        self.auto = is_default_base(base)            # 默认地址：入口机，连不上时退回主站
+        b = str(base or '').strip()
+        self.fixed = API_BASE if self.auto else (b if b.endswith('/') else b + '/')
+        self.log, self.now = log, now
+        self.fails = 0                                # 入口机连着几次连不上
+        self.fallback_until = 0.0                     # 到这个时间前走主站
         self.auth = 'Bearer ' + code.strip()
         self.ua = user_agent
         self._session = session
         self._own = session is None
         self.shut: dict = {}        # 0.4.3 老镇那一块 -> (到什么时候前不再去问, 那次的错)
+
+    # --- 0.4.5 入口机 / 主站 ----------------------------------------------------------------------------------------------
+    def _say(self, msg: str):
+        try:
+            if self.log is not None:
+                self.log.info(f'[鱼缸小镇] {msg}')
+        except Exception:  # noqa: BLE001 - 只是一行日志
+            pass
+
+    @property
+    def root(self) -> str:
+        """这一次请求用哪个地址。走主站满 10 分钟：改回入口机（说一声）。"""
+        if not self.auto:
+            return self.fixed
+        if self.fallback_until:
+            if self.now() < self.fallback_until:
+                return LEGACY_BASE
+            self.fallback_until, self.fails = 0.0, 0
+            self._say('改回小镇的接口入口 api.fishbowltown.com（走主站 fishbowltown.com 满 10 分钟了）')
+        return API_BASE
+
+    def _reached(self, at: str):
+        """入口机回话了（不管回的是什么状态码）：连不上的次数清零。"""
+        if self.auto and at == API_BASE:
+            self.fails = 0
+
+    def _unreachable(self, at: str):
+        """入口机连不上（网络层：还没收到任何回应）：连着 FALLBACK_AFTER 次就改走主站。"""
+        if not self.auto or at != API_BASE or self.fallback_until:
+            return
+        self.fails += 1
+        if self.fails < FALLBACK_AFTER:
+            return
+        self.fails = 0
+        self.fallback_until = self.now() + FALLBACK_S
+        self._say(f'小镇的接口入口 api.fishbowltown.com 连着 {FALLBACK_AFTER} 次连不上，先改走主站 fishbowltown.com，{FALLBACK_S // 60} 分钟后再试入口机')
 
     async def _http(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -94,15 +153,23 @@ class TownClient:
         params = {k: str(v) for k, v in (query or {}).items() if v is not None}
         headers = {'Authorization': self.auth, 'User-Agent': self.ua, **({'Content-Type': 'application/json'} if body is not None else {})}
         http = await self._http()
+        root = self.root
+        answered = False                              # 收到回应了没有（收到以后再断的不算入口机连不上）
         try:
-            async with http.request(method, self.root + path, params=params, headers=headers,
+            async with http.request(method, root + path, params=params, headers=headers,
                                     data=json.dumps(body, ensure_ascii=False).encode() if body is not None else None,
                                     timeout=aiohttp.ClientTimeout(total=timeout)) as res:
+                answered = True
+                self._reached(root)
                 text = await res.text()
                 status, retry = res.status, res.headers.get('Retry-After')
         except aiohttp.ClientError as error:
+            if not answered:
+                self._unreachable(root)
             raise TownError('NETWORK', 0, redact(error)) from None
         except TimeoutError:
+            if not answered:
+                self._unreachable(root)
             raise TownError('NETWORK', 0, 'timeout') from None
         try:
             data = json.loads(text) if text else None
@@ -165,16 +232,29 @@ class TownClient:
         """查一页（只读，不占行动次数）：read = {do: 'look', topic, 筛选…, page}。→ {ok, text, next, pics?}。"""
         return await self.request('POST', 'isle/read', body={'turn': turn_id, 'read': read}, timeout=8)
 
-    def isle_pic_url(self, url: str) -> str | None:
-        """查到的那页带的图的地址：只认小镇自己的 isle/pic/<12 位>.jpg|png（同一个域名）；别的地址一律不取。"""
+    @staticmethod
+    def pic_url_on(base: str, url: str) -> str | None:
+        """url 是不是 base 这个地址下小镇自己的图 isle/pic/<12 位>.jpg|png（同一个协议和域名、不带查询串）；不是就 None。"""
         u = str(url or '').strip()
-        root = urlsplit(self.root)
+        root = urlsplit(base)
         if not re.match(r'^https?://', u):
-            u = self.root + u.lstrip('/')
+            u = base + u.lstrip('/')
         p = urlsplit(u)
         if p.scheme != root.scheme or p.netloc != root.netloc or p.query or p.fragment or '..' in p.path:
             return None
         return u if p.path.startswith(root.path) and PIC_PATH.search(p.path) else None
+
+    def isle_pic_url(self, url: str) -> str | None:
+        """查到的那页带的图的地址：只认小镇自己的 isle/pic/<12 位>.jpg|png（同一个域名）；别的地址一律不取。
+        0.4.5 默认地址时入口机、主站两处的都认（相对地址按现在用的那个）；入口机连不上时改到主站的同一个路径。"""
+        r = self.root
+        if not self.auto:
+            return self.pic_url_on(r, url)
+        for b in (r, API_BASE, LEGACY_BASE):
+            u = self.pic_url_on(b, url)
+            if u:
+                return LEGACY_BASE + u[len(API_BASE):] if b == API_BASE and r == LEGACY_BASE else u
+        return None
 
     async def isle_pic(self, url: str, timeout: float = 8) -> tuple[bytes, str]:
         """取一张图（岛-鱼看图-接口.md）：图是公开的，不带接入码；≤ PIC_BYTES 的 JPEG / PNG。→ (图, 'image/jpeg' 或 'image/png')。"""
@@ -182,8 +262,12 @@ class TownClient:
         if not u:
             raise TownError('PIC_URL', 0, '不是小镇的图')
         http = await self._http()
+        at = API_BASE if u.startswith(API_BASE) else ''
+        answered = False
         try:
             async with http.get(u, headers={'User-Agent': self.ua}, timeout=aiohttp.ClientTimeout(total=timeout)) as res:
+                answered = True
+                self._reached(at)
                 kind = (res.headers.get('Content-Type') or '').split(';')[0].strip().lower()
                 if res.status != 200:
                     raise TownError(f'HTTP_{res.status}', res.status, '图没取到')
@@ -191,8 +275,12 @@ class TownClient:
                     raise TownError('PIC_TYPE', 0, kind or '?')
                 data = await res.content.read(PIC_BYTES + 1)
         except aiohttp.ClientError as error:
+            if not answered:
+                self._unreachable(at)
             raise TownError('NETWORK', 0, redact(error)) from None
         except TimeoutError:
+            if not answered:
+                self._unreachable(at)
             raise TownError('NETWORK', 0, 'timeout') from None
         if not data or len(data) > PIC_BYTES:
             raise TownError('PIC_SIZE', 0, str(len(data)))

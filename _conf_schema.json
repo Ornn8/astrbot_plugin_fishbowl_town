@@ -81,7 +81,8 @@
   "base": {
     "description": "小镇接口地址",
     "type": "string",
-    "default": "https://fishbowltown.com/town/api/outside/",
+    "default": "https://api.fishbowltown.com/town/api/outside/",
+    "hint": "一般不用改。默认走小镇的接口入口 api.fishbowltown.com，连不上时自动改走 fishbowltown.com，10 分钟后再试入口；填了别的地址就只连那个地址。",
     "invisible": true
   },
   "auto_update": {

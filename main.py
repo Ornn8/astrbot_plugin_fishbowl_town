@@ -37,7 +37,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.4'
+VERSION = '0.4.5'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -70,7 +70,7 @@ class FishbowlTown(Star):
             logger.info('[鱼缸小镇] 还没填小镇接入码（或开关关着），先不值班。')
             return
         try:
-            self.client = TownClient(code, str(self.config.get('base') or DEFAULT_BASE), user_agent=f'astrbot-fishbowl-town/{VERSION}')
+            self.client = TownClient(code, str(self.config.get('base') or DEFAULT_BASE), user_agent=f'astrbot-fishbowl-town/{VERSION}', log=logger)
         except TownError as error:
             logger.warning(f'[鱼缸小镇] {error}')
             return
