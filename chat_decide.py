@@ -11,6 +11,8 @@
 0.4.1（主人 11-19「这玩意在对话里逐条报影响用户体验」）：主人不在时那一问只是她带着聊天自己想，不发给他、不记进对话；他在说话时
 她回他的话里「【小镇打算】」那行插件收走再发。办成没办成照旧在他下一句话的背景里告诉她。
 关掉 decide_in_chat = 备选：全由小镇那一问拿主意。
+0.4.5：小镇到了她自己定的时间来叫她（reasons 里有 'wake'）：这是她自己的一次拿主意。离上次问她还不够久时不再回小镇「过一会儿再叫我」，
+而是让小镇那一问当场照她的打算拿主意（role wake，她的模型、一次调用），答完告诉聊天里的她；够久了照旧先问她（和 DSH 插件 0.9.8 一样）。
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import logging
 import re
 import time
 
+from .journal import WAKE
 from .old_town import isle_lines
 
 WAIT_MIN = 8
@@ -113,7 +116,9 @@ def decided_line(role: str, a: dict) -> str:
     plan = a.get('plan') if isinstance(a.get('plan'), dict) else {}
     doing = f"，打算「{str(plan.get('doing'))[:40]}」" if plan.get('doing') else ''
     note = f"（{str(a.get('note'))[:60]}）" if a.get('note') else ''
-    head = '有件事要马上回，小镇那边按你定的规矩先答了' if role == 'rules' else '你在聊天里两次没顾上回，这次小镇那边先替你定了'
+    head = ('有件事要马上回，小镇那边按你定的规矩先答了' if role == 'rules'
+            else '你自己定的时间到了，小镇那边照你的打算定了' if role == 'wake'
+            else '你在聊天里两次没顾上回，这次小镇那边先替你定了')
     return f'{head}：{what}{doing}{note}'
 
 
@@ -159,7 +164,7 @@ class ChatDecide:
         return plan
 
     def route(self, turn: dict) -> dict | None:
-        """None = 小镇那一问照旧拿主意；{'answer': json} = 插件直接回小镇；{'role': execute|rules|fallback}。"""
+        """None = 小镇那一问照旧拿主意；{'answer': json} = 插件直接回小镇；{'role': execute|rules|fallback|wake}。"""
         if not self.on() or (turn or {}).get('kind') != 'agency':
             return None
         if self.j.wish_is_own() and self.j.pending_wish():
@@ -186,11 +191,11 @@ class ChatDecide:
         since = self.now() - self._last()
         if not idle:
             if since < PIGGY_GAP_S:
-                return {'answer': wait_answer((PIGGY_GAP_S - since) / 60, NOTE_WAITING)}
+                return {'role': 'wake'} if WAKE in reasons else {'answer': wait_answer((PIGGY_GAP_S - since) / 60, NOTE_WAITING)}
             self.piggy = {'umo': umo, 'situation': situation_of(turn, NOTE_SITUATION_MAX), 'at': self.now(), 'sent': False}
             return {'answer': wait_answer(5, NOTE_ASKING)}
         if since < self.every_s():
-            return {'answer': wait_answer((self.every_s() - since) / 60, NOTE_WAITING)}
+            return {'role': 'wake'} if WAKE in reasons else {'answer': wait_answer((self.every_s() - since) / 60, NOTE_WAITING)}
         self._mark()
         self.busy = True
         self._task = asyncio.ensure_future(self._ask(turn))
@@ -242,7 +247,7 @@ class ChatDecide:
         self.took(text, '顺着他的话')
 
     def after(self, role: str, decided: dict):
-        if role not in ('rules', 'fallback'):
+        if role not in ('rules', 'fallback', 'wake'):
             return
         line = decided_line(role, decided)
         if line:

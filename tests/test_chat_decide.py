@@ -229,3 +229,74 @@ def test_visit_target_is_a_real_id_or_her_name_never_the_placeholder():
         text = build_turn_prompt(agency('v1'), wish='去找鱼圆串门', wish_own=True, role=role)
         assert '"target": "fish_id"' not in text
         assert '名单里没有的鱼，直接写她的名字' in text
+
+
+# --- 0.4.5：小镇到了她自己定的时间来叫她（reasons 里有 'wake'）：一定是她的模型来定 -----------------------------------------------
+def test_wake_is_never_skipped_as_idle_or_as_her_rest(tmp_path):
+    from astrbot_plugin_fishbowl_town.journal import parse_quiet as pq
+    clock = [1_800_000_000.0]
+    j = Journal(tmp_path / 'w.json', now=lambda: clock[0])
+    j.settle({'action': 'none', 'plan': {'hours': 1, 'doing': '在镜湖边坐坐'}})
+    clock[0] += 3600
+    assert j.skip({'packet': {'reasons': ['wake']}}) is None
+    assert j.skip({'packet': {'reasons': ['wake', 'idle']}}) is None
+    assert j.skip({'packet': {'reasons': ['idle']}}), 'idle alone is still skipped'
+    j.settle({'action': 'none', 'plan': {'hours': 3, 'doing': '睡个午觉'}})
+    clock[0] += 20 * 60
+    assert '睡个午觉' in j.skip({'packet': {'reasons': ['idle']}})['why']
+    assert j.skip({'packet': {'reasons': ['wake']}}) is None, 'the town woke her at the time it has for her'
+    q = pq('00:00-23:59')
+    assert '勿扰' in j.skip({'packet': {'reasons': ['wake']}}, quiet=q)['why'], 'quiet hours hold'
+
+
+def test_wake_inside_the_interval_is_decided_now_by_her_model(tmp_path):
+    d, j, asked, cfg, clock, idle = world(tmp_path, reply=f'嗯\n{PLAN_MARK}去镜湖边走走')
+
+    async def go():
+        assert json.loads(d.route(agency('w1', ['wake']))['answer'])['note'] == NOTE_ASKING     # long enough since the last ask: as before
+        await d._task
+        assert d.route(agency('w2', ['wake'])) == {'role': 'execute'}
+        j.decision({'action': 'none', 'plan': {'hours': 1, 'doing': '在镜湖边走走'}})
+        clock[0] += 3600
+        assert json.loads(d.route(agency('w3', ['idle']))['answer'])['note'] == NOTE_WAITING      # a town look of its own still waits
+        assert d.route(agency('w4', ['wake'])) == {'role': 'wake'}
+        assert d.route(agency('w5', ['wake', 'idle'])) == {'role': 'wake'}
+        assert d.route(agency('w6', ['wake', 'invited'])) == {'role': 'rules'}
+        assert len(asked) == 1, 'no extra ask inside the interval'
+        d2, j2, asked2, _, clock2, _ = world(tmp_path / 'talking', idle=20)                           # he is talking, last ask a minute ago
+        j2.s['chat_decide_at'] = clock2[0] - 60
+        assert d2.route(agency('w7', ['wake'])) == {'role': 'wake'}
+        assert json.loads(d2.route(agency('w7b', ['table']))['answer'])['note'] == NOTE_WAITING
+        assert not asked2
+        d.after('wake', {'action': 'visit', 'target': '阿鲸', 'place': '面包房'})
+        assert any(e['text'] == '你自己定的时间到了，小镇那边照你的打算定了：去面包房找阿鲸串门' for e in j.s['journal'])
+    asyncio.run(go())
+    p = build_turn_prompt(agency('w8', ['wake']), role='wake')
+    assert '该你自己拿主意了 · 你自己定的时间到了' in p and '你上次自己定的再拿主意的时间' in p
+
+
+def test_runner_sends_a_wake_turn_to_her_model(tmp_path):
+    d, j, *_ = world(tmp_path)
+    j.s['chat_decide_at'] = d.now() - 600                   # she was asked 10 minutes ago
+    j.settle({'action': 'none', 'next_wake': 30})
+    j.s['wake']['at'] = d.now() + 300                       # the plugin's clock says five more minutes: the town's own time still counts
+
+    class Client:
+        posted = []
+
+        async def answer(self, tid, body):
+            self.posted.append((tid, body))
+            return {'ok': True}
+
+    prompts = []
+
+    async def ask(prompt):
+        prompts.append(prompt)
+        return json.dumps({'action': 'none', 'note': '去镜湖边坐坐', 'plan': {'hours': 2, 'doing': '镜湖边坐坐'}}, ensure_ascii=False)
+    c = Client()
+    r = Runner(c, j, ask, decide=d)
+    r.running = True
+    asyncio.run(r.handle(agency('ot_w', ['wake']), time.time()))
+    assert len(prompts) == 1 and '你自己定的时间到了' in prompts[0]
+    body = json.loads(c.posted[0][1])
+    assert body['note'] == '去镜湖边坐坐' and body['next_wake'] == 120

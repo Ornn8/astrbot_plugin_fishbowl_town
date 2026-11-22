@@ -38,6 +38,9 @@ TOWN_WHO = ('小镇里的话和事就是你自己在小镇做的：插件另外�
 # 必须她自己回答的拿主意理由（她歇着也叫醒）；没什么可做的理由
 MUST_ANSWER = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'pulled', 'meet_ask'}
 IDLE_REASONS = {'idle', 'fcode', 'ad', 'venue'}
+# 0.4.5：小镇到了她自己定的时间（她的 next_wake）来叫她：reasons 里带 'wake'（可能只有它）。这是她自己的一次拿主意，一定叫她的模型，
+# 不当成「没什么可做的」、也不当成她还在歇着（歇到的就是这会儿）；主人定的勿扰时段照样算（和 DSH 插件 0.9.8 一样）
+WAKE = 'wake'
 
 
 def short(s, n: int) -> str:
@@ -335,6 +338,8 @@ class Journal:
         if in_quiet(quiet, t):
             return {'why': '勿扰时段', 'minutes': clamp_min(quiet_left(quiet, t) + 1)}
         if wish or (reasons and any(r in MUST_ANSWER for r in reasons)):
+            return None
+        if reasons and WAKE in reasons:              # 0.4.5 她自己定的时间到了
             return None
         w = self.s['wake']
         rest = (w['at'] - t) / 60 if w.get('at') and t < w['at'] - 60 else 0
