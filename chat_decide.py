@@ -38,6 +38,7 @@ URGENT = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'meet_ask'}
 PLAN_MARK = '【小镇打算】'
 NOTE_ASKING = '在聊天里想想接下来去哪'
 NOTE_WAITING = '等聊天里的她定接下来做什么'
+PULLED = 'pulled'   # 插件请小镇马上叫她（「去小镇」，或者插件启动时）
 NOTE_EXECUTED = '照你在聊天里定的'
 REST = re.compile(r'^(?:歇|休息|不去|先不去|不出门|睡|待着|在家)')
 ACTION_ZH = {'none': '先不动', 'signup': '报名一桌', 'cancel': '取消报名', 'visit': '去串门', 'join': '参加活动', 'leave': '离开活动', 'pier': '去码头',
@@ -118,6 +119,7 @@ def decided_line(role: str, a: dict) -> str:
     note = f"（{str(a.get('note'))[:60]}）" if a.get('note') else ''
     head = ('有件事要马上回，小镇那边按你定的规矩先答了' if role == 'rules'
             else '你自己定的时间到了，小镇那边照你的打算定了' if role == 'wake'
+            else '你刚才说要去小镇，小镇那边照你的意思定了' if role == 'pull'
             else '你在聊天里两次没顾上回，这次小镇那边先替你定了')
     return f'{head}：{what}{doing}{note}'
 
@@ -164,7 +166,7 @@ class ChatDecide:
         return plan
 
     def route(self, turn: dict) -> dict | None:
-        """None = 小镇那一问照旧拿主意；{'answer': json} = 插件直接回小镇；{'role': execute|rules|fallback|wake}。"""
+        """None = 小镇那一问照旧拿主意；{'answer': json} = 插件直接回小镇；{'role': execute|rules|fallback|wake|pull}。"""
         if not self.on() or (turn or {}).get('kind') != 'agency':
             return None
         if self.j.wish_is_own() and self.j.pending_wish():
@@ -172,6 +174,10 @@ class ChatDecide:
         reasons = [str(r) for r in (((turn or {}).get('packet') or {}).get('reasons') or [])]
         if any(r in URGENT for r in reasons):
             return {'role': 'rules'}
+        # 0.4.6（林小鱼 11-22「她调『去小镇』只回『等它开口』」）：聊天里的她用「去小镇」请小镇叫她（'pulled'，本机记着那句话）：
+        # 小镇会话当场照那句话定（role pull），不再回「等聊天里的她定」；插件启动时自己请的那一次（没记着话）照旧
+        if PULLED in reasons and self.j.pending_wish():
+            return {'role': 'pull'}
         umo = self.home_umo()
         if not umo:
             return None
@@ -247,7 +253,7 @@ class ChatDecide:
         self.took(text, '顺着他的话')
 
     def after(self, role: str, decided: dict):
-        if role not in ('rules', 'fallback', 'wake'):
+        if role not in ('rules', 'fallback', 'wake', 'pull'):
             return
         line = decided_line(role, decided)
         if line:

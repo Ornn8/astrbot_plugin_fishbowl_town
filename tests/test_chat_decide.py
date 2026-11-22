@@ -275,6 +275,28 @@ def test_wake_inside_the_interval_is_decided_now_by_her_model(tmp_path):
     assert '该你自己拿主意了 · 你自己定的时间到了' in p and '你上次自己定的再拿主意的时间' in p
 
 
+def test_pulled_with_her_words_kept_is_decided_now_never_waiting(tmp_path):
+    # 0.4.6 (林小鱼 11-22 「她调『去小镇』只回『等它开口』」): 「去小镇」 keeps her words, then pulls -> role pull
+    d, j, asked, cfg, clock, idle = world(tmp_path)
+
+    async def start():
+        assert d.route(agency('p0', ['pulled', 'table']))['answer']                   # the start pull, nothing kept: as before
+        await d._task
+    asyncio.run(start())
+    d2, j2, asked2, _, _, _ = world(tmp_path / 'kept')
+    j2.wish('主人想让你去小镇玩', own=False)
+    assert d2.route(agency('p1', ['pulled', 'table'])) == {'role': 'pull'}
+    assert d2.route(agency('p2', ['pulled', 'invited'])) == {'role': 'rules'}
+    d3, j3, _, _, _, _ = world(tmp_path / 'own')
+    j3.wish('去镜湖边走走', own=True)
+    assert d3.route(agency('p3', ['pulled'])) == {'role': 'execute'}
+    assert not asked2
+    d2.after('pull', {'action': 'visit', 'target': '阿鲸', 'place': '面包房'})
+    assert any(e['text'] == '你刚才说要去小镇，小镇那边照你的意思定了：去面包房找阿鲸串门' for e in j2.s['journal'])
+    p = build_turn_prompt(agency('p4', ['pulled']), role='pull', wish='主人想让你去小镇玩', wish_own=False)
+    assert '该你自己拿主意了 · 你刚说要去' in p and '主人想让你去小镇玩' in p
+
+
 def test_runner_sends_a_wake_turn_to_her_model(tmp_path):
     d, j, *_ = world(tmp_path)
     j.s['chat_decide_at'] = d.now() - 600                   # she was asked 10 minutes ago
