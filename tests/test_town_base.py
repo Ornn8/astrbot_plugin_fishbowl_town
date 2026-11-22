@@ -10,8 +10,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
-from astrbot_plugin_fishbowl_town.town_client import (API_BASE, DEFAULT_BASE, FALLBACK_S, LEGACY_BASE, TownClient,  # noqa: E402
-                                                      TownError, is_default_base)
+from astrbot_plugin_fishbowl_town.town_client import (API_BASE, DEFAULT_BASE, FALLBACK_S, LEGACY_BASE, OLD_BASE,  # noqa: E402
+                                                      TownClient, TownError, is_default_base)
 
 
 class Res:
@@ -84,9 +84,11 @@ def run(coro):
 def test_the_default_is_the_api_entry_and_the_old_default_counts_as_default():
     assert DEFAULT_BASE == 'https://api.fishbowltown.com/town/api/outside/'
     assert LEGACY_BASE == 'https://fishbowltown.com/town/api/outside/'
-    for b in (None, '', '  ', API_BASE, LEGACY_BASE, 'https://fishbowltown.com/town/api/outside', 'https://api.fishbowltown.com/town/api/outside'):
+    assert OLD_BASE == 'https://fish.bside-moon.cn/town/api/outside/'
+    for b in (None, '', '  ', API_BASE, LEGACY_BASE, OLD_BASE, 'https://fishbowltown.com/town/api/outside', 'https://api.fishbowltown.com/town/api/outside',
+              'https://fish.bside-moon.cn/town/api/outside'):
         assert is_default_base(b), b
-    for b in ('https://fish.bside-moon.cn/town/api/outside/', 'https://t.test/town/api/outside/', 'http://127.0.0.1:8080/town/api/outside/'):
+    for b in ('https://t.test/town/api/outside/', 'http://127.0.0.1:8080/town/api/outside/', 'https://fish.bside-moon.cn/other/'):
         assert not is_default_base(b), b
     schema = json.loads((ROOT / '_conf_schema.json').read_text(encoding='utf-8'))
     assert schema['base']['default'] == API_BASE
@@ -177,7 +179,7 @@ def test_http_errors_never_switch():
 
 def test_a_base_of_her_own_never_switches():
     async def go():
-        for base in ('https://t.test/town/api/outside/', 'https://fish.bside-moon.cn/town/api/outside/'):
+        for base in ('https://t.test/town/api/outside/', 'http://127.0.0.1:8080/town/api/outside/'):
             log = Log()
             net = Net(lambda *_: refused())
             c = TownClient('fbo_test_code_123456', base, session=net, log=log)
@@ -188,10 +190,12 @@ def test_a_base_of_her_own_never_switches():
     run(go())
 
 
-def test_the_old_default_saved_in_the_config_is_the_default_too():
+@pytest.mark.parametrize('saved', ['https://fishbowltown.com/town/api/outside/', 'https://fish.bside-moon.cn/town/api/outside/',
+                                   'https://fish.bside-moon.cn/town/api/outside'])
+def test_an_old_default_saved_in_the_config_is_the_default_too(saved):
     clock = [1000.0]
     net = Net(lambda m, u: refused() if '//api.fishbowltown.com/' in u else Res())
-    c = TownClient('fbo_test_code_123456', 'https://fishbowltown.com/town/api/outside/', session=net, now=lambda: clock[0])
+    c = TownClient('fbo_test_code_123456', saved, session=net, now=lambda: clock[0])
 
     async def go():
         for _ in range(2):

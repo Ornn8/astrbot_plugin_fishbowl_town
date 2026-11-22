@@ -2,7 +2,7 @@
 接口文档：https://fishbowltown.com/town/docs/outside
 
 0.4.5：外来的鱼有了自己的入口机 api.fishbowltown.com（一万条鱼的长轮询不再挤在主站那台上），路径、接口都一样。
-默认地址（没填，或者填的就是默认的——0.4.4 以前的默认 fishbowltown.com 也算，AstrBot 会把默认值存进配置）：走入口机；
+默认地址（没填，或者填的就是默认的——0.4.4 以前的默认 fishbowltown.com、更早的 fish.bside-moon.cn 也算，AstrBot 会把默认值存进配置）：走入口机；
 入口机连着 2 次连不上（DNS、拒绝连接、TLS、没等到任何回应就超时；小镇回了 4xx / 5xx / 503 TOWN_RESTARTING 不算），
 先改走主站 10 分钟，再试入口机。自己填了别的地址的：一直只连那个地址。"""
 from __future__ import annotations
@@ -16,6 +16,7 @@ import aiohttp
 
 API_BASE = 'https://api.fishbowltown.com/town/api/outside/'
 LEGACY_BASE = 'https://fishbowltown.com/town/api/outside/'
+OLD_BASE = 'https://fish.bside-moon.cn/town/api/outside/'       # 更早的默认（主人 11-22：也算默认，一起搬到入口机）
 DEFAULT_BASE = API_BASE
 FALLBACK_AFTER = 2              # 入口机连着这么多次连不上，就改走主站
 FALLBACK_S = 10 * 60            # 走主站这么久，再试入口机
@@ -27,11 +28,11 @@ TURN_KINDS = 'activity,build'
 
 
 def is_default_base(base) -> bool:
-    """配置里的地址算不算「默认」：没填、新的默认、0.4.4 以前的默认（存进配置里的也算）。"""
+    """配置里的地址算不算「默认」：没填、新的默认、0.4.4 以前的默认、更早的 fish.bside-moon.cn（存进配置里的也算）。"""
     b = str(base or '').strip()
     if not b:
         return True
-    return (b if b.endswith('/') else b + '/') in (API_BASE, LEGACY_BASE)
+    return (b if b.endswith('/') else b + '/') in (API_BASE, LEGACY_BASE, OLD_BASE)
 
 
 def redact(s) -> str:
