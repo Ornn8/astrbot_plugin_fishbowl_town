@@ -15,7 +15,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
-from . import render, updater
+from . import isle_tools, render, updater
 from .bridge import life_from_history, scrub_life
 from .chat_decide import PLAN_MARK, ChatDecide, strip_plan
 from .chat_home import ChatHome
@@ -525,7 +525,7 @@ class FishbowlTown(Star):
     # --- 她在和主人聊天时用的工具（只认主人的私聊） ------------------------------------------------------------------------
     @filter.llm_tool(name='fishbowl_town_go')
     async def tool_go(self, event: AstrMessageEvent, wish: str = '', plan: str = ''):
-        """「去小镇」：你住在鱼缸岛上，自己想去哪、做什么（比如去镜湖边走走、去阿鲸的店里坐坐、做个陶碗），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做；路要自己走过去，到了才能做那儿的事。想在自己的地上盖楼（承包的楼、圈的地；田不行）：打算里写在哪块地、想盖什么，那个回合里写 {"world":{"do":"build","lot":"地号","idea":"想盖的"}}，小镇会另给你一个建模回合，你用形状清单把楼写出来，量好报价、你点头（confirm_build）才扣鲸币。主人提议的事也可以带过去（填 wish），去不去、去哪由你定。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
+        """「去小镇」：你住在鱼缸岛上，自己想去哪、做什么（比如去镜湖边走走、去阿鲸的店里坐坐、做个陶碗），就用它写下你的打算（填 plan），插件马上请小镇给你一个拿主意的回合，那边照着你的打算去做；路要自己走过去，到了才能做那儿的事。岛上的事（换鲸币、出价、承包楼、圈地、包田、画立绘、开店……）聊天里现在就能办，不用等回合：看用 fishbowl_isle_look，做用 fishbowl_isle_act；要走过去才能做的（去哪儿逛逛、进店坐坐、门后的小游戏）和盖楼，还是用这个工具写打算。想在自己的地上盖楼（承包的楼、圈的地；田不行）：打算里写在哪块地、想盖什么，那个回合里写 {"world":{"do":"build","lot":"地号","idea":"想盖的"}}，小镇会另给你一个建模回合，你用形状清单把楼写出来，量好报价、你点头（confirm_build）才扣鲸币。主人提议的事也可以带过去（填 wish），去不去、去哪由你定。小镇几分钟内只能叫一次，叫不到时打算会记着，下次拿主意时照办。回来的结果照实告诉主人。
 
         Args:
             wish(string): 主人提议的事，用他的原话或简短转述；去不去由你
@@ -548,6 +548,40 @@ class FishbowlTown(Star):
             if d:
                 return f'{describe_decision(d, TOWN_DECIDED)}。\n（这是你在小镇刚定的；照实告诉主人。）'
         return '已经请小镇给你一个拿主意的机会，这句话那边也记着了；定下来以后会出现在小镇近况里。'
+
+    # 0.4.5 主聊天里的鱼缸岛（isle_tools.py；小镇 platform/接口-主聊天岛上工具.md）：只认主人的私聊
+    @filter.llm_tool(name='fishbowl_isle_look')
+    async def tool_isle_look(self, event: AstrMessageEvent, topic: str = '', near: str = '', spot: str = '', verb: str = '', good: str = '', page: int = 0, more: str = ''):
+        """「看岛上」：查鱼缸岛上的事，不用等小镇的回合，不花钱、不算做事。topic 默认「我的」：你自己的全部——鲸币、饭票和兑换所的价、在哪住哪、整套立绘、名下的地和楼、你的店、你所有还挂着的出价（主人替你出的也在）、欠的、冻住的。别的 topic：地（挂着的地）、楼（待承包的楼）、铺位、店、订单、缺的、统计、镇规、怎么做（verb 填动作名，比如 bid、open、sprite_set）、我的店（spot）、价（good）、地图（near）、样子（spot）、田。每页 8 条，还有下一页时照它写的填 page。主人问你有多少鲸币、你的地、你的出价、岛上哪儿有什么，先用它查，照查到的讲，不要凭印象编。
+
+        Args:
+            topic(string): 查什么：我的、地、楼、铺位、店、订单、缺的、统计、镇规、怎么做、我的店、价、地图、样子、田；不填就是「我的」
+            near(string): 在哪附近：地号、店号、楼号或地名（地、楼、铺位、店、地图、田用）
+            spot(string): 店号、地号、楼号或地名（我的店、样子用）
+            verb(string): 查「怎么做」时填动作名
+            good(string): 查「价」时填货号；不填列出登记的原料
+            page(number): 第几页
+            more(string): 别的筛选，写成 JSON，照「怎么做」写，比如 {"max_coin":800,"min_m2":100}
+        """
+        if not self._is_owner_chat(event):
+            return NOT_OWNER
+        if not self.client:
+            return OFF_DUTY
+        return await isle_tools.look(self.client, isle_tools.read_of(topic, near, spot, verb, good, page, more))
+
+    @filter.llm_tool(name='fishbowl_isle_act')
+    async def tool_isle_act(self, event: AstrMessageEvent, world: str = '', owner_words: str = ''):
+        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；空楼整栋租出去 {"do":"offer_unit","lot":"地号","kind":"stall","rent":4}；画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。换鲸币、画立绘花的是主人的饭票（他的真钱）：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话；他没提就别花，饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用 fishbowl_town_go 写打算，小镇的回合里盖。门后的小游戏也在回合里玩。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
+
+        Args:
+            world(string): 要做的那件事，写成 JSON，和回合里 {"world":{…}} 里的那个对象一样，比如 {"do":"bid","auction":"A-0007","max":600}
+            owner_words(string): 花主人饭票的事（fx_buy 换鲸币、sprite_set 画立绘）必填：主人在这段聊天里叫你做或点头的原话
+        """
+        if not self._is_owner_chat(event):
+            return NOT_OWNER
+        if not self.client:
+            return OFF_DUTY
+        return await isle_tools.act(self.client, world, owner_words, journal=self.journal)
 
     @filter.llm_tool(name='fishbowl_town_here')
     async def tool_here(self, event: AstrMessageEvent):

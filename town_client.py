@@ -233,6 +233,15 @@ class TownClient:
         """查一页（只读，不占行动次数）：read = {do: 'look', topic, 筛选…, page}。→ {ok, text, next, pics?}。"""
         return await self.request('POST', 'isle/read', body={'turn': turn_id, 'read': read}, timeout=8)
 
+    # 0.4.5 主聊天里的鱼缸岛（isle_tools.py；platform/接口-主聊天岛上工具.md）：不等回合。除了接入码 / TOWN_OFF / 503，都回 200 {ok, code, text}
+    async def isle_look(self, read: dict):
+        """查看（和回合里的 isle/read 一样的回答，不要回合号；主聊天每小时 30 次）：read = {topic, 筛选…, page}。"""
+        return await self.request('POST', 'isle/look', body={'read': read}, timeout=15)
+
+    async def isle_act(self, world: dict, ref: str = ''):
+        """现在做一件岛上的事：world 和回合里写的一样；ref = 插件起的单号（同一个 ref 岛上只办一次）。→ {ok, do, code, text, ref, receipt, detail?}。"""
+        return await self.request('POST', 'isle/act', body={'world': world, **({'ref': ref} if ref else {})}, timeout=30)
+
     @staticmethod
     def pic_url_on(base: str, url: str) -> str | None:
         """url 是不是 base 这个地址下小镇自己的图 isle/pic/<12 位>.jpg|png（同一个协议和域名、不带查询串）；不是就 None。"""

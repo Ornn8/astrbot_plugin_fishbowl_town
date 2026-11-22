@@ -1,0 +1,178 @@
+"""0.4.5 主聊天里的鱼缸岛（11-22 林蓝的主人：「我的鱼获取不到 他现在调用不了岛上的工具 只能用镇上的」；小镇 platform/接口-主聊天岛上工具.md；
+DSH 插件 lib/isle-tools.js 的 Python 版）。岛上的事原来只能在小镇派来的回合里写 {"world":{…}}，查看也要开着的回合号：
+主聊天里的她什么都看不到、做不了。小镇开了两个不等回合的口子，main.py 在主人的私聊里给她两个工具：
+    fishbowl_isle_look  看岛上（POST isle/look {read}）：和回合里查的一样，默认「我的」（她自己的全部，一页）
+    fishbowl_isle_act   在岛上做一件事（POST isle/act {world, ref}）：和回合里写的 world 一模一样；岛上回的那句话原样给她
+两个口子除了接入码不对、小镇没开外来的鱼、小镇太忙，都回 200 {ok, code, text}：text 原样给她。
+旧小镇没有这两个口子（404）：照实说还没开，指回「去小镇」（把打算带进回合里办），不报错。
+花主人饭票（真钱）的两件事（fx_buy 换鲸币、sprite_set 画整套立绘）：要主人在这段聊天里叫她做或点了头，owner_words 填他的原话，没有就不发。
+盖楼不在这里（小镇回 cobuild）：插件先接住，指回「去小镇」的回合里盖（0.4.4 的建模回合）。
+看图：AstrBot 的工具结果只带字（图递不到她的模型），地图、样子这两页只给她图上画的是什么。"""
+from __future__ import annotations
+
+import asyncio
+import json
+import secrets
+import time
+
+from .isle import NO_PICS_HEAD, CIRCLED, pics_of
+from .town_client import TownError
+
+LOOK_TOPICS = ('我的', '地', '楼', '铺位', '店', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田')
+OWNER_MONEY = ('fx_buy', 'sprite_set')          # 花主人饭票（真钱）的：要他在聊天里叫她做或点了头
+COBUILD = ('build', 'build_guide', 'confirm_build')
+TOPIC_ZH = {'我的': '你自己的', '地': '挂着的地', '楼': '待承包的楼', '铺位': '空铺位', '店': '开着的店', '订单': '接力订单', '缺的': '最缺的',
+            '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子', '田': '田'}
+VERB_ZH = {
+    'fx_buy': '换鲸币', 'fx_sell': '卖鲸币', 'fx_cancel': '撤卖鲸币的单', 'bid': '出价', 'withdraw': '撤回出价', 'claim': '圈地', 'confirm_claim': '递圈地申请',
+    'take_building': '承包楼', 'field_take': '包田', 'field_quote': '问田的价', 'plant': '种地', 'harvest': '收庄稼', 'field_release': '退田', 'lease_building': '租铺位',
+    'rent_unit': '租楼', 'offer_unit': '把楼租出去', 'live': '搬进自己的楼', 'open': '开店', 'shop': '经营店', 'fund': '往店里放鲸币', 'facade': '改门面',
+    'sprite_set': '画整套立绘', 'sprite_tall': '改身高', 'walk': '走过去', 'sign_up': '报名活动', 'borrow': '借鲸币', 'repay': '还鲸币', 'demolish': '拆楼',
+}
+TEXT_MAX = 1500
+WORDS_MAX = 200
+RETRY_S = 2.0
+
+NOT_YET = '小镇那边还没开这个（主聊天里看岛上、在岛上做事，要等小镇更新）。现在想在岛上看什么、做什么，用 fishbowl_town_go 把打算写下，小镇给你的回合里去办。'
+BUILD_HERE = ('盖楼不在这里做：用 fishbowl_town_go 写下打算（在哪块地、想盖什么），小镇给你的回合里写 {"world":{"do":"build","lot":"地号","idea":"想盖的"}}，'
+              '会另给你一个建模回合；量好报价、你点头（confirm_build）才扣鲸币。')
+HONEST = '（这是岛上刚回你的原话。办成了就照这句告诉主人；没办成就照实说没办成、为什么，别说成办了。）'
+
+
+def clip(v, n: int) -> str:
+    t = str(v if v is not None else '').strip()
+    return t[:n - 1] + '…' if len(t) > n else t
+
+
+def isle_fail(error) -> str:
+    """小镇没接（不是 200）→ 一句白话；旧小镇没有这个口子（404 / 405，不是 TOWN_OFF）→ NOT_YET。"""
+    if isinstance(error, TownError):
+        if error.code == 'TOWN_OFF':
+            return '小镇这会儿没对外来的鱼开放，岛上的事看不了也做不了。'
+        if error.status in (404, 405):
+            return NOT_YET
+        if error.status == 503:
+            return f"小镇这会儿太忙，过一会儿再试{f'（约 {int(error.retry_after)} 秒）' if error.retry_after else ''}。"
+        if error.code in ('NETWORK', 'TOWN_RESTARTING', 'TOWN_OUTSIDE_NOT_CONNECTED'):
+            return '这会儿还没连上小镇（或者小镇在重启），过几秒再试一次。'
+        if error.code == 'TOWN_RATE_LIMITED':
+            return '小镇说太频繁了，过一会儿再试。'
+        return f"小镇没接（{error.code}{'：' + clip(error.reason, 80) if error.reason else ''}）。"
+    return f'出了点错，没办成：{clip(error, 80)}。'
+
+
+def _obj(v):
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return None
+    return v if isinstance(v, dict) else None
+
+
+def read_of(topic: str = '', near: str = '', spot: str = '', verb: str = '', good: str = '', page=0, more='') -> dict:
+    """工具参数 -> 小镇的 read：topic（默认「我的」）+ 筛选 + page；more（JSON）里的别的筛选也带上。"""
+    t = str(topic or '').strip()
+    read = {'topic': t if t in LOOK_TOPICS else '我的'}
+    for src in (_obj(more) or {}, {'near': near, 'spot': spot, 'verb': verb, 'good': good, 'page': page}):
+        for k, v in src.items():
+            if k in ('topic', 'more'):
+                continue
+            if isinstance(v, str) and v.strip():
+                read[k] = v.strip()[:60]
+            elif isinstance(v, bool):
+                if k != 'page':
+                    read[k] = v
+            elif isinstance(v, (int, float)) and v == v and (k != 'page' or v >= 1):
+                read[k] = int(v) if k == 'page' else v
+    return read
+
+
+def world_of(world) -> dict | None:
+    """工具参数 world（JSON 字符串或对象，也收多包了一层的 {"world":{…}}）-> 小镇的 world；没写 do 回 None。"""
+    w = _obj(world)
+    if w and isinstance(w.get('world'), dict):
+        w = w['world']
+    if not w:
+        return None
+    verb = w.get('do').strip() if isinstance(w.get('do'), str) else ''
+    if not verb or verb == 'none':
+        return None
+    return {**w, 'do': verb}
+
+
+def new_ref(now: float | None = None) -> str:
+    """插件自己起的单号（小镇：同一条鱼同一个 ref 只办一次；1–40 位 A-Za-z0-9_-）。"""
+    return f'astr-{int((now or time.time()) * 1000):x}-{secrets.token_hex(3)}'
+
+
+def _retryable(error) -> bool:
+    return isinstance(error, TownError) and (error.code == 'NETWORK' or error.status >= 500)
+
+
+async def look(client, read: dict) -> str:
+    """看岛上：岛上回的那一页原样给她（标上查的是什么）；带图的页只给图上画的是什么。"""
+    if client is None or not hasattr(client, 'isle_look'):
+        return NOT_YET
+    try:
+        r = await client.isle_look(read)
+    except TownError as error:
+        return isle_fail(error)
+    if not isinstance(r, dict):
+        return '岛上没回话，过一会儿再查。'
+    if r.get('ok') is False:
+        old = '\n（「我的」岛上还没开，先查「我的店」，或者「地」「楼」「田」。）' if read.get('topic') == '我的' and 'topic 只能是' in str(r.get('text') or '') else ''
+        return f"没查到：{clip(r.get('text') or r.get('code') or '岛上没说为什么', TEXT_MAX)}{old}"
+    pics = pics_of(r)
+    note = '\n'.join(['', '', NO_PICS_HEAD, *[f'{CIRCLED[k]} {p["alt"] or "（没写画的是什么）"}' for k, p in enumerate(pics)]]) if pics else ''
+    return f"【岛上 · {TOPIC_ZH.get(read['topic'], read['topic'])}】\n{clip(r.get('text') or '（这一页是空的）', TEXT_MAX)}{note}"
+
+
+async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.sleep) -> str:
+    """在岛上做一件事：岛上回的那句话原样给她，框上「照实告诉主人」。连不上 / 岛没答上来：同一个 ref 再发一次（岛上只办一次）。"""
+    w = world_of(world)
+    if not w:
+        return '写一件要做的事：world 填 {"do":"…", …}（和小镇回合里写的 world 一样）。不会写先用 fishbowl_isle_look 查「怎么做」。'
+    verb = w['do']
+    if verb in COBUILD:
+        return BUILD_HERE
+    if verb == 'look':
+        return '查看用 fishbowl_isle_look，不算做事。'
+    words = clip(owner_words, WORDS_MAX) if isinstance(owner_words, str) else ''
+    what = VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
+    if verb in OWNER_MONEY and not words:
+        return f'{what}花的是主人的饭票（他的真钱）：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'
+    if client is None or not hasattr(client, 'isle_act'):
+        return NOT_YET
+
+    def note(t):
+        try:
+            if journal is not None:
+                journal.event('self', t)
+        except Exception:  # noqa: BLE001 只是记一笔
+            pass
+
+    ref = new_ref()
+    r = None
+    for k in range(2):
+        try:
+            r = await client.isle_act(w, ref)
+        except TownError as error:
+            if k == 0 and _retryable(error):                 # 不知道岛上收没收到：同一个 ref 再发一次
+                await sleep(min(5.0, float(error.retry_after or 0)) or RETRY_S)
+                continue
+            why = isle_fail(error)
+            if why != NOT_YET:
+                note(f'你在聊天里想在岛上{what}，没办成：{clip(why, 60)}')
+            return why
+        if k == 0 and isinstance(r, dict) and r.get('ok') is False and r.get('code') == 'unavailable':
+            await sleep(RETRY_S)                               # 岛没答上来：同一个 ref 再问一次
+            continue
+        break
+    if not isinstance(r, dict):
+        return f'岛上没回话，不知道办没办成：先用 fishbowl_isle_look 查「我的」看一眼。{HONEST}'
+    ok = r.get('ok') is not False
+    said = clip(r.get('text') or ('办了' if ok else '没办成'), TEXT_MAX)
+    note(f"你在聊天里{'' if ok else '想'}在岛上{what}{'' if ok else '，没成'}：{clip(said, 80)}{f'（主人说：「{clip(words, 40)}」）' if words else ''}")
+    head = '办成了' if ok else f"没办成（{clip(r.get('code') or '没说', 24)}）"
+    return f'岛上回你的：「{said}」\n{head}。{HONEST}'
