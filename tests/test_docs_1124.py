@@ -25,13 +25,13 @@ SAID = {'新手引导': guide_text(), 'README': README, '做一件事': tool_doc
 
 
 def test_the_islands_own_sentences_rent_paid_price_moving_rate_land_values():
-    assert RENT_RULE == '每天地租 = 成交价的 0.2%（按地价算的更高就按地价）'                         # land.rent_note()
+    assert RENT_RULE == '每天地租 = 成交价的 0.1%（按地价算的更高就按地价）'                         # land.rent_note()（0.4.11：11-23 减半）
     assert FX_RULE == '汇率每天收盘调一次：当天买鲸币的多就涨、卖的多就跌，一天最多涨跌 5%；离起步价 ¥0.004 越远，往回拉得越多，最多偏 30%。'   # exchange.rule_text()
     assert LAND_RULE == '地价每天按附近 14 天的成交价调：成交价高于底价就涨，流拍、退地就跌，一天最多变 5%，最多到原价的 3 倍、最少 0.7 倍。'   # market NOTE
     for where, text in (('新手引导', guide_text()), ('README', README)):
         for rule in (RENT_RULE, FX_RULE, LAND_RULE):
             assert rule in text, (where, rule[:12])
-        assert '汇率每天收盘调一次' in text and '成交价的 0.2%' in text, where
+        assert '汇率每天收盘调一次' in text and '成交价的 0.1%' in text and '0.2%' not in text, where
 
 
 def test_no_old_wording_left():
@@ -51,7 +51,8 @@ def test_idle_land_as_the_island_runs_it():
 def test_heavy_models_allowance_extra_price_and_daily_upkeep_are_stated():
     assert '起步价里含一定的高度、体积、面数和文件大小，超出的另收；面数多、文件大的，每天的物业也跟着多' in BUILD_STEP
     assert '一项一项写着怎么算' in BUILD_STEP
-    for w in ('起步 62.5 鲸币，含 12 米高、1000 立方米', '20000 面、512 KB', '每一万面 125 鲸币', '每 MB 500 鲸币', '文件超出起步的每 MB 每天 20 鲸币', '面数超出起步的每一万面每天 10 鲸币'):
+    # 0.4.11：小镇 11-23 下午降价（价目表 building，和 build_guide 里的数一样）
+    for w in ('起步 62.5 鲸币，含 20 米高、20000 立方米', '80000 面、2048 KB', '每一万面 50 鲸币', '每 MB 100 鲸币', '文件超出起步的每 MB 每天 2 鲸币', '面数超出起步的每一万面每天 1 鲸币'):
         assert w in README, w
 
 
@@ -65,7 +66,7 @@ def test_shops_need_an_inside_one_line_in_the_pointer_rules_and_prices_in_the_re
     assert '**楼里的室内（0.4.9）**' in README
     assert '你说「交吧」才交、说「就这样」才扣鲸币（怎么做见上面「楼里的室内」）' in README
     assert not re.search(r'做室内要 0\.4\.9 以上|这一版（0\.4\.[89]）还做不了', README + g)
-    for w in ('室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给', '起步 50 鲸币 + 每平方米 1 鲸币', '物业每天每平方米 0.05 鲸币'):
+    for w in ('室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给', '起步 20 鲸币 + 每平方米 0.2 鲸币', '物业每天每平方米 0.01 鲸币'):   # 0.4.11：11-23 下午降价
         assert w in README, w
 
 

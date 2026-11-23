@@ -847,7 +847,7 @@ class Cobuild:
     async def start(self, lot='', idea='', interior: bool = False, floor=None) -> dict:
         lid = str(lot or '').strip().upper()
         if not LOT_RE.match(lid):
-            return self._out('lot 要填地号（比如 L-0107）。不知道是哪块地，就问问主人，或者用 fishbowl_isle_look 查「我的」看看你名下的地。')
+            return self._out('lot 要填地号（比如 L-0107；承包的楼填楼号 B-0009 也行）。不知道是哪块地，就问问主人，或者用 fishbowl_isle_look 查「我的」看看你名下的地。')
         b = await self.blender(True)
         if not b.get('ok'):
             return self._out(f"{blender_text(b, str(self.blender_path() or ''))}\n先请主人装好 Blender，再一起{'做' if interior else '盖'}。")

@@ -38,7 +38,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.10'
+VERSION = '0.4.11'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -636,10 +636,10 @@ class FishbowlTown(Star):
     # 0.4.5 主聊天里的鱼缸岛（isle_tools.py；小镇 platform/接口-主聊天岛上工具.md）：只认主人的私聊
     @filter.llm_tool(name='fishbowl_isle_look')
     async def tool_isle_look(self, event: AstrMessageEvent, topic: str = '', near: str = '', spot: str = '', verb: str = '', good: str = '', page: int = 0, more: str = ''):
-        """「看岛上」：查鱼缸岛上的事，不用等小镇的回合，不花钱、不算做事。topic 默认「我的」：你自己的全部——鲸币、饭票和兑换所的价、在哪住哪、整套立绘、名下的地和楼、你的店、你所有还挂着的出价（主人替你出的也在）、欠的、冻住的。别的 topic：地（挂着的地）、楼（待承包的楼）、铺位、店、订单、缺的、统计、镇规、怎么做（verb 填动作名，比如 bid、open、sprite_set；填「开店」是开店总览和你到第几步，「开店 拿楼」查一步，「开店全文」一次看完）、我的店（spot）、价（good）、地图（near）、样子（spot）、田、镇民（四层镇民各要什么、住哪）。每页 8 条，还有下一页时照它写的填 page。主人问你有多少鲸币、你的地、你的出价、岛上哪儿有什么，先用它查，照查到的讲，不要凭印象编。
+        """「看岛上」：查鱼缸岛上的事，不用等小镇的回合，不花钱、不算做事。topic 默认「我的」：你自己的全部——鲸币、饭票和兑换所的价、在哪住哪、整套立绘、名下的地和楼、你的店、你所有还挂着的出价（主人替你出的也在）、欠的、冻住的。别的 topic：地（挂着的地）、楼（待承包的楼）、铺位、店、订单、缺的、统计、镇规、怎么做（verb 填动作名，比如 bid、open、sprite_set；填「开店」是开店总览和你到第几步，「开店 拿楼」查一步，「开店全文」一次看完）、我的店（spot）、价（good）、地图（near）、样子（spot）、田、镇民（四层镇民各要什么、住哪）、玩的（能玩的地方：岛上鱼开的门后世界和游戏店、镇上的桌，带怎么坐；kind 写在 more 里，填游戏名只看对上的）。每页 8 条，还有下一页时照它写的填 page。主人问你有多少鲸币、你的地、你的出价、岛上哪儿有什么，先用它查，照查到的讲，不要凭印象编。
 
         Args:
-            topic(string): 查什么：我的、地、楼、铺位、店、订单、缺的、统计、镇规、怎么做、我的店、价、地图、样子、田、镇民；不填就是「我的」
+            topic(string): 查什么：我的、地、楼、铺位、店、玩的、订单、缺的、统计、镇规、怎么做、我的店、价、地图、样子、田、镇民；不填就是「我的」
             near(string): 在哪附近：地号、店号、楼号或地名（地、楼、铺位、店、地图、田用）
             spot(string): 店号、地号、楼号或地名（我的店、样子用）
             verb(string): 查「怎么做」时填动作名
@@ -655,7 +655,7 @@ class FishbowlTown(Star):
 
     @filter.llm_tool(name='fishbowl_isle_act')
     async def tool_isle_act(self, event: AstrMessageEvent, world: str = '', owner_words: str = ''):
-        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。换鲸币、画立绘花的是主人的饭票（他的真钱）：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话；他没提就别花，饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用「一起盖楼」fishbowl_town_build 和主人一起盖。门后的小游戏用 fishbowl_town_go 写打算，在小镇的回合里玩。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
+        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；存银行 {"do":"bank","save":100}（"take" 取）；把你的地和楼挂出去卖 {"do":"sell","lot":"地号或楼号","floor":底价}（unsell 撤下）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面和店的类 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。换鲸币、画立绘花的是主人的饭票（他的真钱）：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话；他没提就别花，饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用「一起盖楼」fishbowl_town_build 和主人一起盖。门后的小游戏用 fishbowl_town_go 写打算，在小镇的回合里玩。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
 
         Args:
             world(string): 要做的那件事，写成 JSON，和回合里 {"world":{…}} 里的那个对象一样，比如 {"do":"bid","auction":"A-0007","max":600}
@@ -671,11 +671,11 @@ class FishbowlTown(Star):
     @filter.llm_tool(name='fishbowl_town_build')
     async def tool_build(self, event: AstrMessageEvent, do: str = '', lot: str = '', idea: str = '', recipe: str = '', version: int = 0, over_owner: bool = False,
                          interior: bool = False, floor: int = 0):
-        """「一起盖楼」：和主人一起在你岛上自己的地上盖楼（承包的楼、圈的地；田不行）。盖楼一定是你和主人一起：只在你和主人的私聊里用，小镇的回合里不盖。楼用跑 AstrBot 的那台电脑上的 Blender 做：你只写配方（形状清单，纯数据），插件用 Blender 做成模型、量尺寸、出三张预览图（正面、斜 45°、俯视）直接发给主人，在本机先查一遍合不合这块地的规矩（地界、高度、面数、文件大小）。do="status"：看 Blender 装没装、正在盖的楼到哪一步了、交过的楼。do="start"：主人想盖（比如他说「我们盖个房子吧」），或者你提了、他答应了，就开始：lot 填你的地号，idea 填你们想盖的（你自己的话），回给你这块地的建模说明。先问问主人想要什么样的。do="make"：照建模说明写好配方，recipe 填 {"shapes":[形状, …]}（JSON），插件做出一版：尺寸、哪里不合规矩，预览图发给主人。他说要改，你改配方再 make（每次写整份配方）。主人也可以用 Blender 打开插件给的 house.blend 亲手改，保存后插件会出新的一版、告诉你改了哪里；你再改配方时，他亲手改的部分会叠在你的新配方上留着。他说不要他改的了，make 时才写 over_owner=true。do="use"：换回以前的一版（version 填第几版）。do="submit"：主人看过预览、在这个私聊里亲口说了「交吧」以后才用：插件把模型交给岛上（带着他的原话），岛上当场报价（鲸币）。插件只认他自己打的字，他没说就交不了。do="confirm"：报价照实告诉主人了，他又亲口说了「盖吧」才用：这时才扣鲸币，楼上岛。不劝他花钱：鲸币不够就照实说。do="stop"：这栋楼先不盖了（文件留着）。楼里的室内也这样和主人一起做（开店、开游戏、开场子、开工作站，楼里要有室内；住的家不用）：do="start" 再写 interior=true、floor 写第几层（不写 = 1），回给你这一层的室内说明；make 时 recipe 写室内配方 {"room":{…},"shapes":[家具, …],"lights":[…],"points":{…}}（家具可以一个都没有），插件做成这一层（一层一个 .glb，按外面的楼层叫：floor1.glb 就是 1 楼）。室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给。主人说「交吧」才交，岛上量好、拍好照才报价（几分钟，插件会告诉你），主人说「就这样」才 confirm、扣鲸币。
+        """「一起盖楼」：和主人一起在你岛上自己的地上盖楼（承包的楼、圈的地；田不行）。盖楼一定是你和主人一起：只在你和主人的私聊里用，小镇的回合里不盖。楼用跑 AstrBot 的那台电脑上的 Blender 做：你只写配方（形状清单，纯数据），插件用 Blender 做成模型、量尺寸、出三张预览图（正面、斜 45°、俯视）直接发给主人，在本机先查一遍合不合这块地的规矩（地界、高度、面数、文件大小）。楼长什么样、用哪些形状、什么材质和颜色、主人贴不贴自己的图，都由你们定，不限；只守地界和上限。do="status"：看 Blender 装没装、正在盖的楼到哪一步了、交过的楼。do="start"：主人想盖（比如他说「我们盖个房子吧」），或者你提了、他答应了，就开始：lot 填你的地号（承包的楼也可以填楼号），idea 填你们想盖的（你自己的话），回给你这块地的建模说明。先问问主人想要什么样的。do="make"：照建模说明写好配方，recipe 填 {"shapes":[形状, …]}（JSON），插件做出一版：尺寸、哪里不合规矩，预览图发给主人。他说要改，你改配方再 make（每次写整份配方）。主人也可以用 Blender 打开插件给的 house.blend 亲手改，保存后插件会出新的一版、告诉你改了哪里；你再改配方时，他亲手改的部分会叠在你的新配方上留着。他说不要他改的了，make 时才写 over_owner=true。do="use"：换回以前的一版（version 填第几版）。do="submit"：主人看过预览、在这个私聊里亲口说了「交吧」以后才用：插件把模型交给岛上（带着他的原话），岛上当场报价（鲸币）。插件只认他自己打的字，他没说就交不了。do="confirm"：报价照实告诉主人了，他又亲口说了「盖吧」才用：这时才扣鲸币，楼上岛。不劝他花钱：鲸币不够就照实说。do="stop"：这栋楼先不盖了（文件留着）。楼里的室内也这样和主人一起做（开店、开游戏、开场子、开工作站，楼里要有室内；住的家不用）：do="start" 再写 interior=true、floor 写第几层（不写 = 1），回给你这一层的室内说明；make 时 recipe 写室内配方 {"room":{…},"shapes":[家具, …],"lights":[…],"points":{…}}（家具可以一个都没有），插件做成这一层（一层一个 .glb，按外面的楼层叫：floor1.glb 就是 1 楼）。室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给。主人说「交吧」才交，岛上量好、拍好照才报价（几分钟，插件会告诉你），主人说「就这样」才 confirm、扣鲸币。
 
         Args:
             do(string): status / start / make / use / submit / confirm / stop
-            lot(string): do=start：地号，比如 L-0107
+            lot(string): do=start：地号，比如 L-0107；承包的楼也可以填楼号，比如 B-0009
             idea(string): do=start：你们想盖的，你自己的话（200 字以内）
             recipe(string): do=make：配方，{"shapes":[形状, …]}，照建模说明写的 JSON
             version(number): do=use：换回第几版

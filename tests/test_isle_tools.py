@@ -60,7 +60,7 @@ def tool_doc(name):
 
 
 def test_the_two_tools_are_owner_only_main_chat_tools_with_the_doc_topics():
-    assert T.LOOK_TOPICS == ('我的', '地', '楼', '铺位', '店', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田', '镇民')   # 0.4.9：镇民（小镇 11-24）
+    assert T.LOOK_TOPICS == ('我的', '地', '楼', '铺位', '店', '玩的', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田', '镇民')   # 0.4.9：镇民（小镇 11-24）
     for name in ('fishbowl_isle_look', 'fishbowl_isle_act'):
         doc, body = tool_doc(name)
         assert 'if not self._is_owner_chat(event):\n            return NOT_OWNER' in body, name
@@ -191,7 +191,7 @@ def test_048_act_carries_only_a_short_shop_homes_pointer_and_how_to_comes_back_u
     assert T.GUIDE_POINTER in doc                                        # 文档字符串里一字不差
     assert T.GUIDE_POINTER == ('开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。'
                                '一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。')     # 和 DSH 插件 lib/isle-tools.js 的 GUIDE_POINTER 一字不差
-    assert len(doc) <= ACT_DOC_047 + 120, len(doc)
+    assert len(doc) <= ACT_DOC_047 + 120 + 110, len(doc)                    # 0.4.11：+银行存取、挂出去卖、改店的类（约 100 字）
     for w in ('最多 12', '销毁', '"kind":"bed"', '原料只在产地出'):                 # 细节不在说明里：在岛上查
         assert w not in doc, w
     look_doc, _ = tool_doc('fishbowl_isle_look')
