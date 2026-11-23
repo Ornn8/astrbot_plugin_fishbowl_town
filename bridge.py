@@ -9,6 +9,8 @@ import json
 import re
 import time
 
+from .events import is_meet, meet_place
+
 ECHO_RUN = 6          # 连着几个汉字一样算说漏
 DIGITS_RUN = 4        # 几位以上的数字一样算说漏
 LIFE_MAX = 400        # 带进小镇的主聊天内容一共多少字
@@ -173,8 +175,12 @@ def recap_visit(one, *, her_names=(), max_chars: int = VISIT_RECAP_MAX) -> str:
     place = (('在你家' if v.get('role') == 'host' else f'在{other}家') if v.get('place') == 'home'
              else f"在{v.get('place_name') or v.get('place') or '镇上'}")
     head = f"{f'{other}来找你' if v.get('role') == 'host' else f'你去找{other}'}，{place}{f'，聊了 {len(rows)} 句' if rows else ''}"
+    meet = is_meet(v)           # 0.4.10 岛上路上碰到聊的（小镇 isle_meet.py，place 'isle'）：不是谁去找谁，是走着碰到了
+    if meet:
+        head = f"你在{meet_place(v.get('place_name')) or '岛上'}碰到{other}，站着{f'聊了 {len(rows)} 句' if rows else '打了个招呼'}"
     if not rows:
-        return _str(f"{head}{'（' + str(v['summary']) + '）' if v.get('summary') else '，没聊上'}", max_chars)
+        said = meet_place(v['summary']) if meet and v.get('summary') else str(v.get('summary') or '')
+        return _str(f"{head}{'（' + said + '）' if said else '' if meet else '，没聊上'}", max_chars)
     keep = {i for i in (0, len(rows) - 1, len(rows) - 2) if i >= 0}
     keep |= {i for i, r in enumerate(rows) if mine(r)}
     picked = sorted(keep)
@@ -214,5 +220,5 @@ def recap_lines(recaps, since: float = 0) -> list:
                    key=lambda r: float(r.get('ts') or 0))
     if not items:
         return []
-    zh = {'visit': '串门', 'game': '牌局'}
+    zh = {'visit': '串门', 'meet': '路上碰到', 'game': '牌局'}     # 0.4.10 meet = 岛上路上碰到聊的几句
     return ['经过（你刚才在小镇的原话和结果）：', *[f"- {zh.get(r.get('kind'), '小镇')}：{_str(r['text'], 3000)}" for r in items]]

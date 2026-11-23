@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 
+from .isle import isle_ask_of
 from .old_town import isle_lines, old_town_offered
 
 GAME_ZH = {
@@ -240,6 +241,19 @@ ROLE_HEAD = {
     'fallback': ('【鱼缸小镇 · 该你自己拿主意了】',
                  '聊天里的你这两次都没顾上回小镇的事（主人在忙，或者你们在聊别的），这一次你先自己拿主意；做了什么会告诉聊天里的你，下次还是聊天里的你来定。'),
 }
+# 0.4.10 岛上的计划回合 / 短唤醒（isle.isle_ask_of；和 DSH 插件 0.9.14 一样）：照你定的去做、急事先答这两种角色不再说 plan.hours；怎么写照小镇的说明
+ISLE_ROLE_HEAD = {
+    'execute': (ROLE_HEAD['execute'][0],
+                '你已经定好了接下来的打算（下面「你自己定的打算」）。这一步只把它照小镇的说明写成岛上的计划，不要换成别的事，也不要另加没说过的安排（请客、送礼、答应约定都不加）。'
+                '现在真办不了（关门、没这个），就不写那一站，note 写「办不了：原因」，聊天里的你会知道。'),
+    'rules': (ROLE_HEAD['rules'][0],
+              '这一步要马上回（别的鱼邀请你、约好的事到点了、心上的事、主人托的话……），聊天里的你来不及想，你先按你定过的规矩（下面「她在主会话给你留的守则」，没留就照你平时的性子）'
+              '和最近在聊天里说的打算替自己答，答完会马上告诉聊天里的你。先答眼前这件事；接下来去哪照小镇的说明写，别另加请客、送礼、答应约定。'),
+}
+ISLE_ASK_LINE = {
+    'plan': '这一回合给自己定接下来岛上的几站：照【小镇的规则和你的名片】里【接下来做什么】写 "plan"（里面是 "stops"），样子照下面「要的样子」。',
+    'wake': '这一回合是有事叫醒你：照【小镇的规则和你的名片】里【叫醒你的事】写 "wake"（keep / plan / answer / say；换打算的 "plan" 里是 "stops"），样子照下面「要的样子」。',
+}
 # 0.4.3：老镇还开着、小镇还列着老镇的动作时，照着办的那一步可以把老镇的事排进 plan.steps（到点小镇替她去办）；关了就不提
 OLD_STEPS = ('（老镇的报名、串门、码头也可以写进 plan.steps：[{"in_minutes": 几分钟后, "do": "signup", "game": "游戏"} 或 '
              '{"in_minutes": N, "do": "visit", "target": "对方的 fish_id 或名字", "place": "home", "intent": "找她干嘛"} 或 '
@@ -251,7 +265,8 @@ AGENCY_FREE = '去哪、做什么都照你自己的性子和此刻的心情来�
 def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, floors, rules, life=(), role: str = '') -> str:
     p = turn.get('packet') or {}
     actions = p.get('actions') if isinstance(p.get('actions'), list) and p.get('actions') else list(ACTION_ZH)
-    head = ROLE_HEAD.get(role)
+    ask = isle_ask_of(turn)   # 0.4.10：岛上的计划回合 / 短唤醒：plan 照小镇的写（stops），插件不加自己 hours / doing 那一行
+    head = (ISLE_ROLE_HEAD.get(role) if ask else None) or ROLE_HEAD.get(role)
     return '\n'.join([
         f"{head[0] if head else '【鱼缸小镇 · 该你自己拿主意了】'}{'你在小镇叫' + as_ if as_ else ''}{left}",
         *([head[1].replace('{steps}', OLD_STEPS if old_town_offered(turn) else '')] if head else []),
@@ -259,6 +274,7 @@ def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, f
         *isle_lines(turn),   # 0.4.3：住在鱼缸岛上、路要走；老镇还开着就说哪天关
         f"你能做的：{'、'.join(f'{a}（{ACTION_ZH.get(a, a)}）' for a in actions)}。小镇列出来的邀请只是建议，不想去就不去。",
         *(['串门（visit）的 "target" 写对方的 fish_id（「可以去串门」名单里有）；名单里没有的鱼，直接写她的名字。'] if 'visit' in actions else []),
+        ISLE_ASK_LINE[ask] if ask else
         '再给自己安排接下来几个小时（"plan"）：{"hours": 多久以后再叫你拿主意（0.5 到 8，小时）, "doing": "这段时间打算干嘛，你自己的话，30 字内"}。'
         '坐不住、正等着谁就短一点；想歇着、累了、玩够了就长一点，歇几个小时也行——这段时间小镇不会再叫你拿主意，有人约你、到点的约定会记下来，下次醒来再看。'
         '想说一句自己的心思就写在 "note" 里（一句话，可不写）。',
@@ -278,7 +294,7 @@ def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, f
         *(['【主人刚才在聊天里跟你说】', f'「{wish}」——他想让你这样；去不去、怎么去还是你自己拿主意，想去就照着做，不想去就在 note 里说说为什么。', '']
           if wish and not wish_own else []),
         '【怎么回答】', how,
-        'JSON 里一定要有 "action" 和 "plan"（至少有 "hours" 和 "doing"）；也可以只写 "next_wake"（5 到 480 的整数分钟）。',
+        *([] if ask else ['JSON 里一定要有 "action" 和 "plan"（至少有 "hours" 和 "doing"）；也可以只写 "next_wake"（5 到 480 的整数分钟）。']),
         '下面三样都是你自己的话，可写可不写，要写就短：「note」你自己的一句心思；「say」你想说出口的一句话（比如串门、报名时对那边说的）；「intent」这一步你想干嘛——上面的动作里没有你想做的，就写在这里（action 填 none）。',
     ])
 

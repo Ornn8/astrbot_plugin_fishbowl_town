@@ -28,6 +28,20 @@ OWN_MAX = 600
 # 要她自己开口告诉主人的事（问主人同不同意、夸夸群的祝福到了）
 NEEDS_HER = {'heart_consent', 'heart_together', 'bless_ready'}
 MAX_DIALOGUE = 1200
+# 0.4.10（和 DSH 插件 0.9.14 一样）：岛上路上碰到聊的几句（小镇 isle_meet.py）是一次串门，place 'isle'（小镇 visits.MEET_PLACE）
+MEET_PLACE = 'isle'
+MEET_LABEL = '路上碰到聊了几句'
+_DISTANCE = re.compile(r'[（(]\s*约\s*[\d.]+\s*米\s*[）)]')
+
+
+def is_meet(d) -> bool:
+    """一次串门是不是岛上路上碰到聊的（事件的 data、visits/<id> 的 visit 都认）。"""
+    return isinstance(d, dict) and d.get('place') == MEET_PLACE
+
+
+def meet_place(s) -> str:
+    """碰到的地方去掉小镇写的距离（「民宿小路边上（约 1 米）」-> 「民宿小路边上」）。"""
+    return _DISTANCE.sub('', str(s if s is not None else '')).strip()
 
 
 def _short(v, n: int = 300) -> str:
@@ -58,9 +72,12 @@ def describe(item: dict) -> str | None:
         return None
     kind = str(item.get('kind') or '')
     d = item.get('data') if isinstance(item.get('data'), dict) else {}
-    label = KIND_ZH.get(kind, kind or '小镇消息')
+    meet = kind == 'visit' and is_meet(d)    # 0.4.10 岛上路上碰到聊的几句：不是谁去找谁，是走着碰到了
+    label = MEET_LABEL if meet else KIND_ZH.get(kind, kind or '小镇消息')
     facts = (d.get('facts') or d.get('text') or d.get('line') or d.get('summary') or d.get('body') or d.get('title')
              or (d.get('reason') if kind in ('social', 'outside_receipt') else '') or '')
+    if meet and isinstance(facts, str):
+        facts = meet_place(facts)
     line = f"· {label}{'：' + _short(facts) if facts else ''}"
     if kind == 'digest':
         bits = [x for x in (d.get('game_zh') or d.get('game'), d.get('result') or d.get('outcome'), d.get('points_note')) if isinstance(x, str) and x]
@@ -68,12 +85,14 @@ def describe(item: dict) -> str | None:
             line = f"· {label}：{'，'.join(bits)}"
     if kind == 'visit':
         who = d.get('with_name') or d.get('other') or d.get('target_name') or ''
-        where = d.get('place_zh') or d.get('place') or ''
+        if meet and not who and isinstance(d.get('with'), dict):
+            who = str(d['with'].get('name') or '')[:16]
+        where = meet_place(d.get('place_name') or d.get('place_zh') or '') if meet else d.get('place_zh') or d.get('place') or ''
         if not facts:
             line = f"· {label}{'：和' + who if who else ''}{'在' + where if where else ''}"
         dlg = _dialogue(d.get('dialogue'))
         if dlg:
-            line += f'\n【串门时的对话】\n{dlg}'
+            line += f"\n【{'路上聊的' if meet else '串门时的对话'}】\n{dlg}"
     if kind == 'outside_line' and d.get('rule_zh'):
         line = f"· {label}：{d['rule_zh']}"
     if kind == 'bless_ready':

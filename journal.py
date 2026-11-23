@@ -8,6 +8,7 @@ import re
 import time
 from pathlib import Path
 
+from .isle import stops_of, stops_text
 from .prompts import GAME_ZH, HOLD_KINDS
 
 KEEP = 400                 # 0.3.3：小镇的事全部进聊天（主人 11-17「我要的是全部内容」），多记一些（40 -> 400）
@@ -25,6 +26,8 @@ ACTION_ZH = {'none': '什么都不做，歇着', 'signup': '报名', 'cancel': '
              'pier': '去码头', 'arcade': '去电玩城', 'make': '去做点东西', 'court': '去旁听', 'challenge': '下战书', 'propose': '提议一件事',
              'club_join': '加入俱乐部', 'club_leave': '退出俱乐部'}
 TOWN_DECIDED = '你在小镇定了'
+# 0.4.10 岛上的短唤醒（小镇 isle_plan.py）她选的那一样
+WAKE_ZH = {'keep': '照原来的打算往下走', 'plan': '换了打算', 'answer': '回了叫醒的那件事', 'say': '说了一句'}
 # 照实说是谁做的：小镇的回合是插件另调她的模型答的，她在聊天里不在场；那些选择记在她名下，但不算她的判断
 # 0.1.2（DSH 0.7.13 同一件事：一条鱼说「能自由的地方基本就一处：能说『不去』」，四天里没用过一次「去小镇」写自己的打算）：
 # 照实告诉她，去哪、做什么她自己也能定，那边照着去做
@@ -54,6 +57,11 @@ def clock(ts: float) -> str:
 
 def describe_decision(d: dict, who: str = '你决定') -> str:
     what = ACTION_ZH.get(d.get('action'), d.get('action') or '什么都不做')
+    rest = d.get('action') in (None, '', 'none')
+    if d.get('stops_n'):        # 0.4.10 岛上的计划回合：她排的几站
+        what = f"{'定了接下来的计划' if rest else what}，岛上 {d['stops_n']} 站（{d.get('stops') or ''}）"
+    elif rest and d.get('wake'):
+        what = WAKE_ZH.get(d['wake'], f"叫醒的事：{d['wake']}")
     obj = ' · '.join(short(x, 20) for x in (GAME_ZH.get(d.get('game'), d.get('game')), d.get('target'), d.get('place')) if x)
     why = d.get('note') or d.get('intent')
     say = f"，说：「{short(d['say'], 50)}」" if d.get('say') and d.get('say') != why else ''
@@ -142,6 +150,12 @@ class Journal:
         d = {'kind': 'decision', 'action': str(a.get('action') or 'none'), 'game': str(a.get('game') or ''), 'target': str(a.get('target') or ''),
              'place': str(a.get('place') or ''), 'note': short(a.get('note'), 120), 'intent': short(a.get('intent') or a.get('want'), 120),
              'say': short(a.get('say'), 120), 'next_wake': a.get('next_wake') if isinstance(a.get('next_wake'), int) else None}
+        stops = stops_of(a)         # 0.4.10 岛上的计划回合 / 短唤醒：她排的几站、她选的那一样（别的回合不多记）
+        if stops:
+            d['stops'], d['stops_n'] = stops_text(stops), len(stops)
+        w = a.get('wake') if isinstance(a.get('wake'), dict) else None
+        if w and isinstance(w.get('choice'), str) and w['choice']:
+            d['wake'] = short(w['choice'], 8)
         if self.s.get('wish'):   # 主人托的话：她拿过一次主意就算带到了
             d['wish'], d['wish_own'] = self.s['wish']['text'], bool(self.s['wish'].get('own'))
             del self.s['wish']
@@ -356,8 +370,23 @@ class Journal:
             m = clamp_min(m + quiet_left(quiet, at) + 1)
         return m
 
-    def settle(self, obj: dict, quiet=None) -> dict:
-        """她答完拿主意：把她定的作息加上主人的勿扰时段，写回答案，记下下次醒的时间。"""
+    def settle(self, obj: dict, quiet=None, isle: str = '') -> dict:
+        """她答完拿主意：把她定的作息加上主人的勿扰时段，写回答案，记下下次醒的时间。
+        0.4.10 isle = 'plan' | 'wake'（岛上的计划回合 / 短唤醒，isle.isle_ask_of）：什么时候再问她由小镇按她的几站定（主人的勿扰时段、最短间隔小镇照算），
+        答案原样交回（不加 next_wake、不改 plan.hours、不动 stops）；这里只记下她打算干嘛。没写站、自己写了 next_wake 的，记下她要歇到什么时候。"""
+        if isle:
+            w = obj.get('wake') if isinstance(obj.get('wake'), dict) else None
+            p = w['plan'] if w and isinstance(w.get('plan'), dict) else obj['plan'] if isinstance(obj.get('plan'), dict) else {}
+            n = len(p['stops']) if isinstance(p.get('stops'), list) else 0
+            try:
+                own = float(re.sub(r'[^\d.]', '', str(obj.get('next_wake') or '')) or 0)
+            except ValueError:
+                own = 0
+            m = clamp_min(own) if own > 0 and not n else 0
+            self.s['wake'] = {'at': self.now() + m * 60 if m else 0, 'minutes': m, 'doing': str(p.get('doing') or obj.get('note') or '')[:60],
+                              'steps': n, 'isle': isle}
+            self.save()
+            return obj
         h = (obj.get('plan') or {}).get('hours') if isinstance(obj.get('plan'), dict) else None
         try:
             mine = float(h) * 60 if h else float(re.sub(r'[^\d.]', '', str(obj.get('next_wake') or '')) or 0)

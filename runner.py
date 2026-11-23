@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import time
 
@@ -12,7 +13,7 @@ from . import events as ev
 from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
 from .build import SKIP, build_again, build_max_chars, build_note, build_prompt, build_within_s, is_build, read_build
-from .isle import Isle, PicsRefused, isle_version_of, isle_within_s, unattach
+from .isle import Isle, PicsRefused, isle_ask_of, isle_version_of, isle_within_s, stops_of, stops_text, unattach
 from .journal import play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
@@ -23,6 +24,43 @@ MIN_BUDGET = 3        # 剩下不到这么多就不问了
 RETRY_MIN = 8         # 第一次答得不能读时，剩下的时间够这么多才追问一次
 ANSWER_WITHIN = 23    # 本地上限：收到回合后这么久还没答完就放弃（小镇等 25 秒）
 EVENTS_EVERY = 60
+# 0.4.10（和 DSH 插件 0.9.14 一样；11-23 04:25 小镇重启：入口机一分钟记了约 1,300 次「no live upstreams」）：几百条鱼同一秒断、
+# 同一秒等满 3 秒、又同一秒连回去。出错以后的等待加一点随机：8 秒以内的等 [一半, 一倍半]，小镇说了 Retry-After 的等 [它, 两倍]，
+# 都不超过 8 秒（牌局还在进行，回合 25 秒就过期）；本来就超过 8 秒的（没开放、太勤、接入码不对）多等 0–25%。
+JITTER_CAP = 8.0
+
+
+def jitter_s(s: float, rand=random.random, *, at_least: bool = False) -> float:
+    base = float(s or 0)
+    if base <= 0:
+        return base
+    r = min(1.0, max(0.0, float(rand() or 0)))
+    if base > JITTER_CAP:
+        return base * (1 + 0.25 * r)
+    lo = base if at_least else base / 2
+    hi = min(JITTER_CAP, base * 2 if at_least else base * 1.5)
+    return lo + (hi - lo) * r
+
+
+def isle_said(ask: str, a) -> str:
+    """0.4.10 插件日志里那一句：「定了接下来的计划，岛上 3 站（镜湖逛逛、麦香面包房买可颂、家睡觉）」。"""
+    a = a if isinstance(a, dict) else {}
+    stops = stops_of(a)
+    w = a.get('wake') if isinstance(a.get('wake'), dict) else {}
+    act = str(a.get('action') or 'none')
+    head = '' if act == 'none' else f'{act}，'
+    if stops:
+        out = f'{head}定了接下来的计划，岛上 {len(stops)} 站（{stops_text(stops)}）'
+    elif ask == 'plan':
+        out = f'{head}没写站（原地歇着）'
+    else:
+        c = w.get('choice') if isinstance(w.get('choice'), str) else ''
+        out = f"{head}{WAKE_SAID.get(c, '叫醒她的事：' + (c[:8] or '没写'))}"
+    note = f"（{str(a['note'])[:40]}）" if a.get('note') else ''
+    return out + note
+
+
+WAKE_SAID = {'keep': '照原来的打算往下走', 'plan': '换了打算', 'answer': '回了叫醒她的事', 'say': '说了一句'}
 
 
 def again_prompt(prompt: str, said: str, correction: str) -> str:
@@ -32,8 +70,9 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 class Runner:
     def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time,
-                 owner_life=None, on_echo=None, recap=lambda: True, decide=None, see=None, on_event=None, on_turn=None):
+                 owner_life=None, on_echo=None, recap=lambda: True, decide=None, see=None, on_event=None, on_turn=None, rand=random.random):
         self.client, self.journal, self.ask = client, journal, ask
+        self.rand = rand              # 0.4.10 重连等待的随机（测试里换成定的）
         self.on_event, self.on_turn = on_event, on_turn   # 0.4.7 一起盖楼（cobuild.py）：isle_build 事件、回合里看到的空地
         self.see = see                # 0.4.2 看图：查到的图能不能附给她（main._see_pics）
         self.decide = decide          # 0.4.0「主聊天拿主意」（chat_decide.ChatDecide）
@@ -209,11 +248,17 @@ class Runner:
             decided = None
             if kind == 'agency':
                 try:
-                    decided = j.settle(json.loads(answer), self.quiet())
+                    # 0.4.10 岛上的计划回合 / 短唤醒（isle_ask_of）：她的回答原样交（不写 next_wake、不改 plan.hours、不动 stops），下次什么时候问她由小镇按她的几站定
+                    ask = isle_ask_of(turn)
+                    decided = j.settle(json.loads(answer), self.quiet(), isle=ask)
                     # 0.4.0：照她在聊天里定的办的，note 标一下（小镇那边数得出；主人在「战绩」里看得到）
-                    if role == 'execute' and isinstance(decided, dict) and not str(decided.get('note') or '').startswith('办不了'):
+                    marked = role == 'execute' and isinstance(decided, dict) and not str(decided.get('note') or '').startswith('办不了')
+                    if marked:
                         decided['note'] = (NOTE_EXECUTED + ('：' + str(decided['note']) if decided.get('note') else ''))[:200]
-                    answer = json.dumps(decided, ensure_ascii=False)
+                    if not ask or marked:
+                        answer = json.dumps(decided, ensure_ascii=False)
+                    if ask:
+                        self.log.info(f'岛上的{"计划回合" if ask == "plan" else "短唤醒"} {tid}：{isle_said(ask, decided)}')
                 except ValueError:
                     decided = None
             await self._post(tid, answer, turn, received)
@@ -259,10 +304,11 @@ class Runner:
         except Exception:  # noqa: BLE001 - 读不到就不带
             return []
 
-    async def _recap_visit(self, ref: str):
+    async def _recap_visit(self, ref: str, meet: bool = False):
+        """0.4.10：meet = 岛上路上碰到聊的几句（小镇 isle_meet.py：一次串门，place 'isle'）：记成「路上碰到」，进她的「小镇经过」。"""
         try:
             one = await self.client.visit_lines(ref)
-            self.journal.recap(ref, 'visit', recap_visit(one, her_names=[self.her_name()]))
+            self.journal.recap(ref, 'meet' if meet else 'visit', recap_visit(one, her_names=[self.her_name()]))
         except Exception as error:  # noqa: BLE001 - 取不到原话就只有一行结果
             self.log.debug(f'取串门原话整理经过失败：{error!r}')
 
@@ -326,6 +372,11 @@ class Runner:
 
     # --- 循环 -----------------------------------------------------------------------------------------------------------
     async def _backoff(self, error: Exception) -> float:
+        """0.4.10：每一种等待都加一点随机（jitter_s），几百条鱼不在同一秒连回来。"""
+        ra = getattr(error, 'retry_after', 0) or 0
+        return jitter_s(await self._wait_for(error), self.rand, at_least=ra > 0)
+
+    async def _wait_for(self, error: Exception) -> float:
         code = error.code if isinstance(error, TownError) else 'UNKNOWN'
         if not self.stats['problem']:
             self.stats['problem_since'] = self.now()
@@ -406,8 +457,9 @@ class Runner:
                 raw = j.table_raw(ref) or {}
                 result = re.sub(r'^[^：]{1,8}：', '', re.sub(r'[。.]\s*$', '', str(d.get('facts') or d.get('summary') or '')))
                 j.recap(ref, 'game', recap_game({'title': d.get('game_name') or d.get('game_zh') or '', 'result': result, 'moves': raw.get('moves') or []}))
+            meet = kind == 'visit' and ev.is_meet(d)   # 0.4.10 岛上路上碰到聊的几句：进「小镇经过」（路上碰到），不进简报
             if kind == 'visit' and d and on and (d.get('visit_id') or d.get('ref')):
-                self._tasks.append(asyncio.create_task(self._recap_visit(str(d.get('visit_id') or d.get('ref')))))
+                self._tasks.append(asyncio.create_task(self._recap_visit(str(d.get('visit_id') or d.get('ref')), meet=meet)))
             if table:
                 it = {**it, 'data': {**d, 'facts': re.sub(r'[。.]\s*$', '', str(d.get('facts') or d.get('summary') or '')) + table['note']}}
             line = ev.describe(it)
@@ -424,7 +476,7 @@ class Runner:
             if line and kind not in ev.QUIET:
                 tag = ev.FRESH_TAG.get(kind, '')
                 j.event(kind, ev.no_money(line) if tag else line, tag)
-                if self.brief and kind not in ('outside_turn', 'outside_receipt'):
+                if self.brief and kind not in ('outside_turn', 'outside_receipt') and not meet:
                     try:
                         self.brief(ev.no_money(line))          # 0.2.0 小镇简报：她在小镇的事攒着，一阵一阵跟主人说
                     except Exception:  # noqa: BLE001 - the brief never stops the events

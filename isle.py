@@ -56,6 +56,43 @@ def isle_within_s(turn) -> float:
     return min(WITHIN_MAX_S, s) if s > 25 else 0
 
 
+# 0.4.10 岛上的一天（小镇 isle_plan.py，开关 isle_plan；和 DSH 插件 0.9.14 一样）：她自己排接下来的几站，小镇带她走、到了替她做，有事才叫醒她。
+# 计划回合 packet.isle.ask = {type: 'plan', min, max, stops}，短唤醒 {type: 'wake', events}（整份回合 {type: 'business'} 照旧）。
+# 这两种回合的回答照小镇那一行写（"plan" 里是 "stops"、"wake" 里是 keep / plan / answer / say），插件不再加自己 hours / doing 的那一行，
+# 也不改她的回答（journal.settle 不往里写 next_wake、plan.hours）。11-23 真跑 DSH 0.9.12：插件那一行盖过了小镇的，她照老样子答，原地歇着。
+PLAN_ASKS = ('plan', 'wake')
+DO_ZH = {'look': '逛逛', 'act': '办事', 'craft': '做手作', 'plant': '种田', 'harvest': '收成', 'business': '办岛上的事', 'door': '玩门后的小游戏',
+         'rest': '歇着', 'sleep': '睡觉'}
+
+
+def isle_ask_of(turn) -> str:
+    """这一回合小镇要的是她岛上的计划（'plan'）或短唤醒（'wake'）；别的回合 ''。"""
+    a = _isle(turn).get('ask')
+    t = str(a.get('type') or '') if isinstance(a, dict) else ''
+    return t if t in PLAN_ASKS else ''
+
+
+def stops_of(a) -> list:
+    """她回答里的几站：plan.stops，或短唤醒里换的打算 wake.plan.stops；没有就 []。"""
+    if not isinstance(a, dict):
+        return []
+    w = a.get('wake') if isinstance(a.get('wake'), dict) else None
+    p = w['plan'] if w and isinstance(w.get('plan'), dict) else a.get('plan') if isinstance(a.get('plan'), dict) else None
+    return [s for s in p['stops'] if isinstance(s, dict)] if p and isinstance(p.get('stops'), list) else []
+
+
+def stops_text(stops, n: int = 3) -> str:
+    """几站 -> 「镜湖逛逛、麦香面包房买可颂、家睡觉」（给插件日志、/town history、聊天里的她自己看；不进主人的简报）。"""
+    items = [s for s in stops if isinstance(s, dict)] if isinstance(stops, list) else []
+
+    def one(s):
+        go = s.get('go') if isinstance(s.get('go'), str) else ''
+        do = s.get('do') if isinstance(s.get('do'), str) else ''
+        what = s['what'] if do == 'act' and isinstance(s.get('what'), str) and s['what'] else DO_ZH.get(do, '')
+        return clip(f'{go}{what}', 14)
+    return '、'.join(x for x in (one(s) for s in items[:n]) if x) + ('…' if len(items) > n else '')
+
+
 def rules_text(blocks) -> str:
     """小镇给的几块规矩 -> 一段字（按固定顺序，同一个版本拼出来永远一样）。"""
     if not isinstance(blocks, dict):

@@ -22,6 +22,7 @@ import logging
 import re
 import time
 
+from .isle import stops_of, stops_text
 from .journal import WAKE
 from .old_town import isle_lines
 
@@ -116,12 +117,14 @@ def decided_line(role: str, a: dict) -> str:
         what = ' '.join(x for x in [ACTION_ZH.get(act, act), place] if x)
     plan = a.get('plan') if isinstance(a.get('plan'), dict) else {}
     doing = f"，打算「{str(plan.get('doing'))[:40]}」" if plan.get('doing') else ''
+    stops = stops_of(a)          # 0.4.10 岛上的几站（她自己知道就好，背景里给她看）
+    route = f'，岛上 {len(stops)} 站：{stops_text(stops)}' if stops else ''
     note = f"（{str(a.get('note'))[:60]}）" if a.get('note') else ''
     head = ('有件事要马上回，小镇那边按你定的规矩先答了' if role == 'rules'
             else '你自己定的时间到了，小镇那边照你的打算定了' if role == 'wake'
             else '你刚才说要去小镇，小镇那边照你的意思定了' if role == 'pull'
             else '你在聊天里两次没顾上回，这次小镇那边先替你定了')
-    return f'{head}：{what}{doing}{note}'
+    return f"{head}：{'定了接下来的计划' if stops and act == 'none' else what}{doing}{route}{note}"
 
 
 class ChatDecide:
