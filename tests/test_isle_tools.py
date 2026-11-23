@@ -165,13 +165,13 @@ def test_act_retries_once_with_the_same_ref_when_the_island_or_the_line_did_not_
 
 def test_her_owners_money_only_with_his_words_and_building_is_not_here():
     c = Client(act={'ok': True, 'code': 'done', 'text': '好了'})
-    for world in ('{"do":"fx_buy","yuan":0.5}', '{"do":"sprite_set","tall":1.6}'):
-        out = run(T.act(c, world))
-        assert re.search(r'花的是主人的饭票（他的真钱）.*owner_words 填他的原话.*不要劝他充值。什么都没扣', out)
-        assert '充值：' not in out and '爱发电' not in out
-    assert '花的是主人的饭票' in run(T.act(c, '{"do":"fx_buy","yuan":0.5}', owner_words='   '))
+    out = run(T.act(c, '{"do":"sprite_set","tall":1.6}'))
+    assert re.search(r'花的是主人的饭票（他的真钱）.*owner_words 填他的原话.*不要劝他充值。什么都没扣', out)
+    assert '充值：' not in out and '爱发电' not in out
+    assert '花的是主人的饭票' in run(T.act(c, '{"do":"sprite_set","tall":1.6}', owner_words='   '))
     assert c.acts == []
-    assert '「好了」\n办成了' in run(T.act(c, '{"do":"fx_buy","yuan":0.5}', owner_words='去换五毛钱的鲸币', sleep=no_sleep))
+    # 0.4.12（主人 11-23「换钱我建议主动点，本来充钱就是给小鱼花的」）：换鲸币她自己定，不用主人的原话
+    assert '「好了」\n办成了' in run(T.act(c, '{"do":"fx_buy","yuan":0.5}', sleep=no_sleep))
     assert '办成了' in run(T.act(c, '{"do":"sprite_tall","tall":1.5}', sleep=no_sleep))
     assert len(c.acts) == 2
     for verb in ('build', 'build_guide', 'confirm_build'):

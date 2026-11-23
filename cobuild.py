@@ -364,6 +364,29 @@ def is_yes(text) -> bool:
     return bool(SHORT_RE.match(t) or YES_RE.search(t))
 
 
+# 0.4.12（11-23 一位 AstrBot 主人叫鱼交二楼，鱼说「插件看到的最后一行是 QQ 私聊里的系统时间戳」，「交吧」认不出来）：别的插件、平台给消息
+# 加上的时间、系统那种行不是他打的话。整行只有日期、时刻、星期、「当前时间 / 系统」这类字的，认他的话时拿掉；拿掉以后什么都不剩的那一条不记。
+_TIME_BITS = re.compile(
+    r'\d{2,4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}\s*日?'
+    r'|\d{1,2}\s*[:：]\s*\d{2}(?:\s*[:：]\s*\d{2}(?:\.\d+)?)?'
+    r'|(?:星期|周|礼拜)[一二三四五六日天]|上午|下午|中午|凌晨|早上|晚上|傍晚|半夜'
+    r'|当前时间|现在时间|现在是|系统时间|北京时间|东京时间|发送时间|消息时间|收到时间|时间戳|时间|日期|系统消息|系统提示|系统'
+    r'|\b(?:am|pm|utc|gmt|cst|jst|timestamp|time|date|now|current|system)\b|[+-]\d{2}:?\d{2}\b|(?<=\d)[tTzZ]\b|(?<=\d)[tT](?=\d)', re.I)
+_META_TAG = re.compile(r'<\s*(system[\w-]*|time[\w-]*|current[_-]?time|timestamp|date)\b[^>]*>.*?<\s*/\s*\1\s*>', re.I | re.S)
+_BRACKET = re.compile(r'[\[【(（<〔]([^\[\]【】()（）<>〔〕]{0,80})[\]】)）>〕]')
+
+
+def _meta_only(s: str) -> bool:
+    return not any(ch.isalnum() for ch in _TIME_BITS.sub('', str(s)))
+
+
+def owner_text(text) -> str:
+    """主人这一条里他自己打的字：拿掉时间、系统那种行（和只装着时间的括号），别的原样。"""
+    s = _META_TAG.sub('\n', str(text if text is not None else ''))
+    s = _BRACKET.sub(lambda m: '' if _meta_only(m.group(1)) else m.group(0), s)
+    return '\n'.join(ln.strip() for ln in s.splitlines() if ln.strip() and not _meta_only(ln)).strip()
+
+
 class OwnerWords:
     """每个私聊里主人最近亲手打的几句（只在内存里：插件重载后要他再说一声）。observe 只交主人亲手打的字进来（main.py 认 is_admin + 私聊）。"""
 
@@ -372,7 +395,7 @@ class OwnerWords:
         self.by: dict = {}
 
     def observe(self, key, text, at: float | None = None):
-        k, t = str(key or ''), str(text if text is not None else '').strip()
+        k, t = str(key or ''), owner_text(text)
         if not k or not t:
             return
         lst = self.by.setdefault(k, [])
