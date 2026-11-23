@@ -192,9 +192,11 @@ def setup(tmp_path, found=FOUND, town=None, owner=OWNER):
 def test_vendored_scripts_are_the_islands_byte_for_byte_and_never_eval():
     assert hashlib.sha256(C.SCRIPT_FILE.read_bytes()).hexdigest() == C.SCRIPT_SHA256
     assert b'\r\n' not in C.SCRIPT_FILE.read_bytes() and b'\r\n' not in C.LAYER_FILE.read_bytes()
-    server = ROOT.parent / 'wt-1124-door' / 'ops' / 'revenue-20261022' / 'fishbowl-town' / 'tools' / 'cobuild' / 'recipe_to_blend.py'
-    if server.exists():
-        assert hashlib.sha256(server.read_bytes()).hexdigest() == C.SCRIPT_SHA256
+    # 0.4.13 和小镇 feat/1126-recipe-detail（配方第 2 版）那一份一样；那个工作区不在就不比（插件在仓库根下或套一层都找得到）
+    for top in (ROOT.parent, ROOT.parent.parent):
+        server = top / 'wt-1126-recipe' / 'ops' / 'revenue-20261022' / 'fishbowl-town' / 'tools' / 'cobuild' / 'recipe_to_blend.py'
+        if server.exists():
+            assert hashlib.sha256(server.read_bytes()).hexdigest() == C.SCRIPT_SHA256, 'same as the server copy'
     dsh = ROOT.parent / 'wt-dsh-cobuild' / 'lib' / 'cobuild' / 'owner_layer.py'
     if dsh.exists():
         assert dsh.read_bytes() == C.LAYER_FILE.read_bytes(), 'same owner_layer.py as the DSH plugin'
@@ -310,6 +312,8 @@ def test_start_make_submit_only_on_his_own_jiao_ba_then_quote_then_gai_ba(tmp_pa
         assert '插件已经直接发到你们的私聊里了' in m['text'] and cb.work_file() in m['text'] and Path(cb.work_file()).exists()
         call = b.calls[-1][2]
         assert call[0] == '--recipe' and '--lot' in call and not any('plaster' in x for x in call)
+        # 配方第 2 版（11-26）：她自己的图放在草稿的 images 文件夹，起头时就建好、说给她听，做的时候交给脚本
+        assert arg(call, '--images') == str(cb.images_dir(d)) and cb.images_dir(d).is_dir() and str(cb.images_dir(d)) in s['text']
         assert '主人看到以后还没在这里亲口说话' in (await cb.submit(OWNER))['text']
         cb.observe_owner(OWNER, '好看')
         assert '听着不像让你交' in (await cb.submit(OWNER))['text']

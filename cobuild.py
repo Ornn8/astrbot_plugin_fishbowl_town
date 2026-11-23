@@ -41,8 +41,9 @@ from .town_client import TownError
 HERE = Path(__file__).resolve().parent
 SCRIPT_FILE = HERE / 'cobuild_scripts' / 'recipe_to_blend.py'
 LAYER_FILE = HERE / 'cobuild_scripts' / 'owner_layer.py'
-# 小镇 tools/cobuild/recipe_to_blend.py（11-23 那一版）的 sha256：插件原样带着，测试查一字不差
-SCRIPT_SHA256 = '3e0b835c321aeffe5ca916404e365625ab8a29bd169b8cb4e8fa37aa1647a450'
+# 小镇 tools/cobuild/recipe_to_blend.py（11-26 配方第 2 版：倒角、旋转体、扫掠、软垫、图案、自己的图、defs + use）的 sha256：插件原样带着，测试查一字不差
+SCRIPT_SHA256 = '7b865c12d1845c09752308684d886ebfd9b18b2262de29f6bf5d241253d688eb'
+IMAGES_DIR = 'images'          # 草稿里放她自己的图（主人传的、她生成的）的文件夹：配方的 image 按文件名从这里找（--images）
 MIN_BLENDER = (4, 2)
 BLENDER_URL = 'https://www.blender.org/download/'
 NEED_BLENDER = '盖楼要先装 Blender（4.2 或更新）'
@@ -657,6 +658,16 @@ class Cobuild:
             return ['--room', str(self.room_json(d))] if self.room_json(d).exists() else []
         return ['--lot', str(self.lot_json(d))] if self.lot_json(d).exists() else []
 
+    def images_dir(self, d) -> Path:
+        return self.draft_dir(d) / IMAGES_DIR
+
+    def _img_args(self, d) -> list:
+        """配方第 2 版的 image：她自己的图，按文件名从草稿的 images 文件夹找。"""
+        return ['--images', str(self.images_dir(d))] if self.images_dir(d).is_dir() else []
+
+    def images_line(self, d) -> str:
+        return f'自己的图（主人传的、你生成的）放进 {self.images_dir(d)}，配方的 image 写文件名（png / jpg / webp）。'
+
     def _layer_file(self, d, spec) -> Path:
         return self.vdir(d, spec['n']) / 'layer.blend'
 
@@ -898,7 +909,7 @@ class Cobuild:
         if isinstance(idea, str) and idea.strip():
             d['idea'] = clip(idea, IDEA_MAX)
         d['limits'] = g.get('limits') if isinstance(g.get('limits'), dict) else None
-        self.draft_dir(d).mkdir(parents=True, exist_ok=True)
+        self.images_dir(d).mkdir(parents=True, exist_ok=True)         # 连草稿目录一起建
         if isinstance(g.get('lot_json'), dict):
             self._write_json(self.lot_json(d), g['lot_json'])
         (self.draft_dir(d) / 'guide.txt').write_text(str(g.get('text') or ''), 'utf-8')
@@ -908,7 +919,7 @@ class Cobuild:
         v = self.current(d)
         return self._out('\n'.join([
             f"开始和主人在 {d['lotName'] + '（' + lid + '）' if d['lotName'] and d['lotName'] != lid else lid + ' '}上一起盖楼了{'（接着上次的第 ' + str(v['n']) + ' 版）' if v else ''}。先问问主人想要什么样的（几层、什么样子、有没有院子……他也可以发参考图），再照下面的建模说明写配方，用 do=\"make\" 交给插件做出来。",
-            '这里只要形状清单：recipe 填 {"shapes":[形状, …]}。做好的楼由插件交，主人在这里说了「交吧」才交、说了「盖吧」才确认，你不用写 confirm_build。',
+            '这里只要形状清单：recipe 填 {"shapes":[形状, …]}（可以带 "defs"）。' + self.images_line(d) + '做好的楼由插件交，主人在这里说了「交吧」才交、说了「盖吧」才确认，你不用写 confirm_build。',
             '', '【建模说明】', str(g.get('text') or '（岛上没给说明）').strip()]), self.previews_of(d, v) if v else [])
 
     async def _start_inside(self, c, lid, idea, floor) -> dict:
@@ -947,7 +958,7 @@ class Cobuild:
         if isinstance(idea, str) and idea.strip():
             d['idea'] = clip(idea, IDEA_MAX)
         d['limits'] = g.get('limits') if isinstance(g.get('limits'), dict) else None
-        self.draft_dir(d).mkdir(parents=True, exist_ok=True)
+        self.images_dir(d).mkdir(parents=True, exist_ok=True)         # 连草稿目录一起建
         if isinstance(g.get('room_json'), dict):
             self._write_json(self.room_json(d), g['room_json'])
         (self.draft_dir(d) / 'guide.txt').write_text(str(g.get('text') or ''), 'utf-8')
@@ -963,7 +974,8 @@ class Cobuild:
         return self._out('\n'.join([
             f"开始和主人做 {name}的 {n} 楼室内了{'（接着上次的第 ' + str(v['n']) + ' 版）' if v else ''}。{INSIDE_LINE}"
             f"{'：这栋楼外面 ' + str(d['floors']) + ' 层' if d.get('floors') else ''}{'，这一层 ' + str(num(area)) + ' 平方米' if area > 0 else ''}。",
-            '先问问主人屋里放什么，再照下面的室内说明写室内配方，用 do="make" 交给插件做出来。recipe 填 {"room":{…},"shapes":[家具, …],"lights":[灯, …],"points":{…}}（家具可以一个都没有）。',
+            '先问问主人屋里放什么，再照下面的室内说明写室内配方，用 do="make" 交给插件做出来。recipe 填 {"room":{…},"defs":{…},"shapes":[家具, …],"lights":[灯, …],"points":{…}}（家具可以一个都没有）。'
+            + self.images_line(d),
             f'一层一个 .glb，插件按外面的楼层叫（这一层是 {self.glb_name(d)}）。主人在这里说了「交吧」才交；岛上量好、拍好照才报价（几分钟），他说了「就这样」才确认、扣鲸币。',
             '', '【室内说明】', str(g.get('text') or '（岛上没给说明）').strip()]), self.previews_of(d, v) if v else [])
 
@@ -991,7 +1003,7 @@ class Cobuild:
             except (TypeError, ValueError):
                 mx = 1024
             if kb > mx:
-                return {'why': f'室内配方有 {kb} KB，最多 {num(mx)} KB：合并家具、少用几个再做。'}
+                return {'why': f'室内配方有 {kb} KB，最多 {num(mx)} KB：一样的家具用 defs 写一次、use 放几个，再做。'}
             return {'text': text, 'shapes': len(obj['shapes'])}
         if not isinstance(obj, (dict, list)):
             return {'why': 'recipe 要填配方：{"shapes":[形状, …]}。'}
@@ -1007,7 +1019,7 @@ class Cobuild:
         except (TypeError, ValueError):
             mx = 1024
         if kb > mx:
-            return {'why': f'配方有 {kb} KB，这块地最多 {num(mx)} KB：合并形状、少用几个再做。'}
+            return {'why': f'配方有 {kb} KB，这块地最多 {num(mx)} KB：一样的部件用 defs 写一次、use / repeat 放几个，再做。'}
         return {'text': text, 'shapes': len(sh)}
 
     async def make(self, recipe=None, over_owner: bool = False) -> dict:
@@ -1042,7 +1054,7 @@ class Cobuild:
             kept = None
             if layer:
                 # 主人亲手改过：先从配方做，再把他那一层叠上去，再出图、量尺寸
-                r1 = await self.run(b['path'], ['--recipe', rf, '--out-blend', vd / 'recipe.blend', '--out-glb', vd / 'recipe.glb', *self._lot_args(d)])
+                r1 = await self.run(b['path'], ['--recipe', rf, '--out-blend', vd / 'recipe.blend', '--out-glb', vd / 'recipe.glb', *self._lot_args(d), *self._img_args(d)])
                 if not r1['ok']:
                     return fail(r1['why'])
                 self._write_json(vd / 'layer-spec.json', layer)
@@ -1058,7 +1070,7 @@ class Cobuild:
                 if r['ok'] and isinstance((r1['result'] or {}).get('numbers'), dict):
                     r['result']['numbers'] = {**(r['result'].get('numbers') or {}), 'shapes': r1['result']['numbers'].get('shapes')}
             else:
-                r = await self.run(b['path'], ['--recipe', rf, '--out-blend', vd / 'house.blend', '--out-glb', vd / self.glb_name(d), '--previews', vd, *self._lot_args(d), '--json-out', jo], json_out=str(jo))
+                r = await self.run(b['path'], ['--recipe', rf, '--out-blend', vd / 'house.blend', '--out-glb', vd / self.glb_name(d), '--previews', vd, *self._lot_args(d), *self._img_args(d), '--json-out', jo], json_out=str(jo))
             if not r['ok']:
                 return fail(r['why'])
             cur = self.current(d)
