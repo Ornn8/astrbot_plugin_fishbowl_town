@@ -27,6 +27,7 @@ from .runner import Runner
 from .old_town import closed_text, isle_status_line, now_with_isle
 from .town_client import DEFAULT_BASE, TownClient, TownError, closed
 from .cobuild import WATCH_S, Cobuild, at_of, blender_text, numbers_line
+from .gallery import GALLERY_NO, GALLERY_YES, Gallery, image_type, owner_said
 
 # 0.4.2 岛上查到的图：模型明说不收图的错（OpenAI / Gemini / Claude / DeepSeek 各家的说法），记一天
 PICS_REFUSED = re.compile(r'image|vision|multimodal|multi-modal|image_url|不支持.{0,6}图|图片', re.I)
@@ -38,7 +39,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.14'
+VERSION = '0.4.15'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -53,6 +54,7 @@ class FishbowlTown(Star):
         self.client: TownClient | None = None
         self.runner: Runner | None = None
         # 0.4.0「主聊天拿主意」：去哪、做什么由私聊里的她定（chat_decide.py）
+        self.gallery = Gallery(self.journal)       # 0.4.15 画廊上岛：试画报价、主人发的图（内存里）、洗好的照片（打分用），gallery.py
         self.decide = ChatDecide(self.journal, ask_main=self._ask_main, home_umo=self.owner_umo, idle_s=self._owner_idle_s, config=self.config, log=logger,
                                  chat_on=self._chat_on)
         self.note = TownNote(fetch_bonds=self._bonds, fetch_now=self._now_line, journal=self.journal, log=logger, recap=self._recap_on, decide=self.decide)
@@ -86,7 +88,7 @@ class FishbowlTown(Star):
         self.runner = Runner(self.client, self.journal, self._ask, tell=self._tell, notify=self._notify, brief=self._brief_line,
                              quiet=lambda: parse_quiet(self.config.get('quiet_hours')), her_name=lambda: self._her_name, log=logger,
                              owner_life=self._owner_life, owner_secret=self._owner_secret, on_echo=self._on_echo, recap=self._recap_on, decide=self.decide, see=self._see_pics,
-                             on_event=self.cobuild.on_event, on_turn=self.cobuild.see_turn)
+                             on_event=self._on_event, on_turn=self.cobuild.see_turn)
         self.runner.start()
         logger.info('[鱼缸小镇] 开始在小镇值班（长轮询回合 + 每分钟读事件）')
         # 0.4.2 新手引导：已经在小镇过过日子的（本子里有事）是老用户，更新到这一版不再推；新住进来的，认好私聊就发一次
@@ -388,6 +390,13 @@ class FishbowlTown(Star):
             return []
         return scrub_life(await self._owner_secret())
 
+    def _on_event(self, it):
+        """小镇事件：一起盖楼的（cobuild）；0.4.15 照片洗好了（media photo_done）记下，30 分钟里主人一句「4 星」打的是这张。"""
+        self.cobuild.on_event(it)
+        d = it.get('data') if isinstance(it, dict) and isinstance(it.get('data'), dict) else None
+        if d and it.get('kind') == 'media' and d.get('what') == 'photo_done' and d.get('order_id'):
+            self.gallery.photo_done(d['order_id'])
+
     def _on_echo(self, e: dict):
         """她在小镇差点说出主聊天里的事：记一笔；一小时里三次就把这根管子停 24 小时，告诉主人一声。"""
         s = self.journal.s
@@ -447,6 +456,13 @@ class FishbowlTown(Star):
                 if frm:
                     self.home.moved(frm, to)
                 logger.info(f'[鱼缸小镇] 她的家{"搬到" if frm else "认作"}了主人这个私聊（{"主人 2 天没在原来那里说话" if frm else "还没绑定"}）')
+            # 0.4.15 画廊上岛：他在你们的私聊里发的图记下（她写 "ref":"主人的图" 时才传上去）；照片洗好 30 分钟里一句「4 星」替他打给小镇
+            if self._is_owner_chat(event):
+                pics = [c for c in (event.get_messages() or []) if type(c).__name__ == 'Image']
+                if pics:
+                    self.gallery.owner_pics(umo, pics)       # 当场记下：同一条消息里她就可能写「主人的图」
+                if event.message_str:
+                    asyncio.create_task(owner_said(self.gallery, umo, [], event.message_str, self.client, logger))
         except Exception as error:  # noqa: BLE001 - never in the way of his message
             logger.debug(f'[鱼缸小镇] 认主人的私聊出错：{error!r}')
 
@@ -712,7 +728,7 @@ class FishbowlTown(Star):
 
     @filter.llm_tool(name='fishbowl_isle_act')
     async def tool_isle_act(self, event: AstrMessageEvent, world: str = '', owner_words: str = ''):
-        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；存银行 {"do":"bank","save":100}（"take" 取）；把你的地和楼挂出去卖 {"do":"sell","lot":"地号或楼号","floor":底价}（unsell 撤下）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面和店的类 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。画整套立绘花的是主人给你的饭票：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。换鲸币你自己定：主人的饭票本来就是给你在岛上花的，要用鲸币就去换，不用先问他；店里做事、开店这些自己付的，鲸币不够会按兑换价从饭票换差的，不用先换；出价、圈地、承包、地租不自动换，要先换好；饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用「一起盖楼」fishbowl_town_build 和主人一起盖。门后的小游戏用 fishbowl_town_go 写打算，在小镇的回合里玩。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
+        """「在岛上做一件事」：你住在鱼缸岛上。这里不用等小镇的回合，现在就替你在岛上办一件事，和小镇回合里写的 {"world":{…}} 一模一样、同样的规矩（在哪、钱够不够、竞拍怎么算）。world 写那个对象（JSON），比如：换鲸币 {"do":"fx_buy","yuan":0.2}（yuan 是花多少元饭票），卖回饭票 {"do":"fx_sell","coin":50}；出价抢挂着的地、楼、田 {"do":"bid","auction":"A-0007","max":600}，撤回 {"do":"withdraw","auction":"A-0007"}；承包挂牌的楼 {"do":"take_building","building":"B-0493","max":900}；圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}；包田 {"do":"field_take","field":"田号"}，种 {"do":"plant","field":"田号","crop":"wheat"}，收 {"do":"harvest","field":"田号"}；开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。画整套立绘（岛上的你：转身、走路、坐、睡觉、干活）{"do":"sprite_set","tall":1.6}，只改身高 {"do":"sprite_tall","tall":1.6}（不收钱）；存银行 {"do":"bank","save":100}（"take" 取）；把你的地和楼挂出去卖 {"do":"sell","lot":"地号或楼号","floor":底价}（unsell 撤下）；开店 {"do":"open",…}、经营 {"do":"shop",…}、往店里放鲸币 {"do":"fund",…}、改门面和店的类 {"do":"facade",…}、走过去 {"do":"walk","to":"地名"}。别的动作照岛上的动作表写；不会写先用 fishbowl_isle_look 查「怎么做」（verb 填动作名）。画整套立绘花的是主人给你的饭票：只有主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。换鲸币你自己定：主人的饭票本来就是给你在岛上花的，要用鲸币就去换，不用先问他；店里做事、开店这些自己付的，鲸币不够会按兑换价从饭票换差的，不用先换；出价、圈地、承包、地租不自动换，要先换好；饭票不够就照实说，不要劝他充值。鲸币（你在岛上的钱）怎么花你自己定。盖楼不在这里：用「一起盖楼」fishbowl_town_build 和主人一起盖。门后的小游戏用 fishbowl_town_go 写打算，在小镇的回合里玩。画廊、方子：查「怎么做」、verb 填「画廊」。试画先报价，主人在这里说了「画吧」再写 {"do":"gallery_confirm","quote":"报价号"}，那时才扣。拿主人发的图当参考图：ref 写「主人的图」。回来的是岛上的原话：办成了照实告诉主人，没办成就说没办成和原因，别说成办了。
 
         Args:
             world(string): 要做的那件事，写成 JSON，和回合里 {"world":{…}} 里的那个对象一样，比如 {"do":"bid","auction":"A-0007","max":600}
@@ -722,7 +738,19 @@ class FishbowlTown(Star):
             return NOT_OWNER
         if not self.client:
             return OFF_DUTY
-        return await isle_tools.act(self.client, world, owner_words, journal=self.journal)
+        umo = event.unified_msg_origin
+
+        # 0.4.15 画廊：试画确认只认主人在私聊里、报价以后亲手打的点头话（和交楼同一套）；「主人的图」是他 30 分钟内在这里发的最后一张
+        def consent(since):
+            return self.cobuild.consent(umo, since, '试画', '「画吧」', GALLERY_YES, GALLERY_NO)
+
+        async def owner_pic():
+            img = self.gallery.latest_pic(umo)
+            if img is None:
+                return None
+            data = base64.b64decode(await img.convert_to_base64())
+            return data, image_type(data)
+        return await isle_tools.act(self.client, world, owner_words, journal=self.journal, gallery=self.gallery, consent=consent, owner_pic=owner_pic)
 
     # 0.4.7 主人和鱼一起盖楼（cobuild.py；小镇 platform/接口-一起盖楼.md）：只认主人的私聊；交、确认只认他自己打的字（watch_owner 记的）
     @filter.llm_tool(name='fishbowl_town_build')

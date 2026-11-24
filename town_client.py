@@ -54,7 +54,8 @@ def transient(code: str, path: str = '') -> bool:
 
 
 # 一直都在的接口（她住在鱼缸岛上也照样用）。别的是老镇那几块：11-28 老镇关门以后会回 TOWN_OFF 或 404
-CORE = ('turns', 'events', 'status', 'agency', 'settings', 'consent', 'isle/')
+# 0.4.15：photo/rate（主人打分）小镇 11-26 / 11-27 才有，没有时回 404：不因为它把整块 photo 当成关了
+CORE = ('turns', 'events', 'status', 'agency', 'settings', 'consent', 'isle/', 'photo/rate')
 CLOSED_S = 30 * 60          # 老镇的一块回了「关了」：这么久里不再去问（不是一直重试），之后再看一眼
 
 
@@ -131,10 +132,10 @@ class TownClient:
         if self._own and self._session is not None and not self._session.closed:
             await self._session.close()
 
-    async def request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15, form=None):
+    async def request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15, form=None, raw=None):
         if core_path(path):
             try:
-                return await self._request(method, path, query=query, body=body, timeout=timeout, form=form)
+                return await self._request(method, path, query=query, body=body, timeout=timeout, form=form, raw=raw)
             except TownError as error:          # 小镇在重启 / 连不上：重启以后各块可能又开了，记着的「关了」作废
                 if error.code == 'NETWORK' or error.status >= 500:
                     self.shut.clear()
@@ -144,18 +145,22 @@ class TownClient:
         if was and was[0] > time.monotonic():            # 刚说过关了：不再去问
             raise TownError(was[1].code, was[1].status, was[1].reason, 0, was[1].data)
         try:
-            return await self._request(method, path, query=query, body=body, timeout=timeout, form=form)
+            return await self._request(method, path, query=query, body=body, timeout=timeout, form=form, raw=raw)
         except TownError as error:
             if closed(error):
                 self.shut[part] = (time.monotonic() + CLOSED_S, error)
             raise
 
-    async def _request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15, form=None):
+    async def _request(self, method: str, path: str, *, query: dict | None = None, body=None, timeout: float = 15, form=None, raw=None):
         params = {k: str(v) for k, v in (query or {}).items() if v is not None}
-        headers = {'Authorization': self.auth, 'User-Agent': self.ua, **({'Content-Type': 'application/json'} if body is not None and form is None else {})}
+        # raw = (字节, 类型)：请求体就是那些字节（0.4.15 画廊参考图）
+        ctype = {'Content-Type': raw[1]} if raw is not None else {'Content-Type': 'application/json'} if body is not None and form is None else {}
+        headers = {'Authorization': self.auth, 'User-Agent': self.ua, **ctype}
         # form：multipart（0.4.7 交楼的 glb），fields = [(名字, 值, 文件名, 类型)]；每次请求现做一份（aiohttp 的 FormData 只能发一次）
         data = None
-        if form is not None:
+        if raw is not None:
+            data = bytes(raw[0])
+        elif form is not None:
             data = aiohttp.FormData()
             for name, value, filename, ctype in form:
                 if filename:
@@ -255,6 +260,19 @@ class TownClient:
     async def isle_act(self, world: dict, ref: str = ''):
         """现在做一件岛上的事：world 和回合里写的一样；ref = 插件起的单号（同一个 ref 岛上只办一次）。→ {ok, do, code, text, ref, receipt, detail?}。"""
         return await self.request('POST', 'isle/act', body={'world': world, **({'ref': ref} if ref else {})}, timeout=30)
+
+    # 0.4.15 画廊（小镇 11-26 起，开关关着时回「画廊还没开」或 404）
+    async def gallery_confirm(self, quote: str, owner_words: str):
+        """主人点头了的试画 → {ok, code: making|done, order, paid, text} | {ok: False, code, text}。同一个报价号再确认不会扣第二次。"""
+        return await self.request('POST', 'isle/gallery/confirm', body={'quote': str(quote), 'owner_words': str(owner_words or '')}, timeout=30)
+
+    async def gallery_upload(self, data: bytes, ctype: str):
+        """主人发的图当参考图：请求体就是图（jpg / png / webp，≤ 8 MB）→ {ok, upload_id: 'u_…'} | {ok: False, code: bad|busy, text}。"""
+        return await self.request('POST', 'isle/gallery/upload', raw=(data, ctype or 'image/jpeg'), timeout=60)
+
+    async def photo_rate(self, order_id: str, score: int):
+        """主人给一张照片打分（1–5 星，24 小时内能改）→ {ok, score, recipe?}。"""
+        return await self.request('POST', 'photo/rate', body={'order_id': str(order_id), 'score': int(score)}, timeout=10)
 
     # 0.4.7 主人和鱼一起盖楼（cobuild.py；小镇 platform/接口-一起盖楼.md §1）：都回 200 {ok, code, text, …}
     async def isle_build_guide(self, lot: str):

@@ -19,6 +19,7 @@ import time
 from .isle import NO_PICS_HEAD, CIRCLED, pics_of
 from .town_client import TownError
 from .journal import eta_of
+from .gallery import GALLERY_NO, GALLERY_YES, UPLOAD_MAX, image_type, is_owner_pic_ref
 
 LOOK_TOPICS = ('我的', '地', '楼', '铺位', '店', '玩的', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田', '镇民')   # 0.4.9：镇民（小镇 11-24 四层镇民）；0.4.11：玩的（小镇 11-23 play.py）
 # 小镇的 TOPICS 还有「住宿」：11-23 线上查它只回「按房间住宿、出租还没开」，等岛上开了再加
@@ -172,8 +173,16 @@ async def look(client, read: dict) -> str:
     return f"【岛上 · {TOPIC_ZH.get(read['topic'], read['topic'])}】\n{clip(r.get('text') or '（这一页是空的）', FULL_MAX if read.get('topic') == '怎么做' else TEXT_MAX)}{note}"
 
 
-async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.sleep) -> str:
-    """在岛上做一件事：岛上回的那句话原样给她，框上「照实告诉主人」。连不上 / 岛没答上来：同一个 ref 再发一次（岛上只办一次）。"""
+# 0.4.15 画廊：她的 gallery_confirm 插件自己办（岛上不收她直接写的）；GALLERY_CLOSED = 小镇还没开画廊时她看到的，不是报错。
+# GALLERY_HOW 原样写在 main.py fishbowl_isle_act 的说明里（AstrBot 的工具说明就是那段 docstring，测试会比对）
+GALLERY_CLOSED = '画廊还没开。什么都没扣。'
+GALLERY_HOW = '画廊、方子：查「怎么做」、verb 填「画廊」。试画先报价，主人在这里说了「画吧」再写 {"do":"gallery_confirm","quote":"报价号"}，那时才扣。拿主人发的图当参考图：ref 写「主人的图」。'
+
+
+async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.sleep, gallery=None, consent=None, owner_pic=None) -> str:
+    """在岛上做一件事：岛上回的那句话原样给她，框上「照实告诉主人」。连不上 / 岛没答上来：同一个 ref 再发一次（岛上只办一次）。
+    0.4.15 画廊：gallery = gallery.Gallery；consent(since) -> {'why'} | {'words'}（cobuild 那一套：主人私聊、报价以后、他亲手打的、像点头）；
+    owner_pic() -> (字节, 类型) | None（主人 30 分钟内在私聊里发的最后一张图）。"""
     w = world_of(world)
     if not w:
         return '写一件要做的事：world 填 {"do":"…", …}（和小镇回合里写的 world 一样）。不会写先用 fishbowl_isle_look 查「怎么做」。'
@@ -182,6 +191,14 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
         return BUILD_HERE
     if verb == 'look':
         return '查看用 fishbowl_isle_look，不算做事。'
+    if verb == 'gallery_confirm':
+        return await confirm_try(client, w, journal=journal, gallery=gallery, consent=consent)
+    w2 = w
+    if verb == 'gallery' and is_owner_pic_ref(w.get('ref')):
+        up = await upload_owner_pic(client, gallery, owner_pic)
+        if up.get('why'):
+            return up['why']
+        w2 = {**w, 'ref': up['id']}
     words = clip(owner_words, WORDS_MAX) if isinstance(owner_words, str) else ''
     what = car_what(w) or report_what(w) or VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
     if verb in OWNER_MONEY and not words:
@@ -201,7 +218,7 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     r = None
     for k in range(2):
         try:
-            r = await client.isle_act(w, ref)
+            r = await client.isle_act(w2, ref)
         except TownError as error:
             if k == 0 and _retryable(error):                 # 不知道岛上收没收到：同一个 ref 再发一次
                 await sleep(min(5.0, float(error.retry_after or 0)) or RETRY_S)
@@ -226,5 +243,93 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
         except Exception:  # noqa: BLE001 只是记一笔
             pass
     queued = ok and r.get('code') == 'queued'   # 0.4.13：远处下单先出发，到了才办（小镇 auto-transit 11-24），这会儿还没办完
+    # 0.4.15 画廊试画报价：插件记下报价号，她写 gallery_confirm 时拿来核对主人的话
+    q = gallery.quoted(r) if gallery is not None and r.get('code') == 'quoted' else None
+    if q:
+        coin = f"，{q['coin']} 鲸币" if q.get('coin') else ''
+        return (f"岛上回你的：「{said}」\n只报了价，还没扣：报价号 {q['quote']}{coin}。把价告诉主人；他在这里说了「画吧」，"
+                f'再写 {{"do":"gallery_confirm","quote":"{q["quote"]}"}}，那时才扣（2 小时内有效）。他不说就不用管。{HONEST}')
     head = '还没办完：出发了，到了照办，办好了小镇下一回合告诉你' if queued else '办成了' if ok else f"没办成（{clip(r.get('code') or '没说', 24)}）"
     return f'岛上回你的：「{said}」\n{head}。{HONEST}'
+
+
+def _note(journal, t) -> str:
+    try:
+        if journal is not None:
+            return journal.event('self', t) or ''
+    except Exception:  # noqa: BLE001 只是记一笔
+        pass
+    return ''
+
+
+async def confirm_try(client, w: dict, *, journal=None, gallery=None, consent=None) -> str:
+    """0.4.15 画廊：主人点了头的试画（报价以后、他亲手打的字、像点头），插件交给岛上确认。"""
+    if gallery is None or client is None or not hasattr(client, 'gallery_confirm'):
+        return NOT_YET
+    want = w.get('quote').strip() if isinstance(w.get('quote'), str) else ''
+    q = gallery.quote(want)
+    if not q:
+        if want:
+            return f'插件这里没有在等的报价 {clip(want, 16)}（或者已经过了 2 小时）：先重新试一次拿新报价（{{"do":"gallery","recipe":"R-…","try":1,"wish":"…"}}）。什么都没扣。'
+        return '现在没有在等主人点头的试画报价：先写 {"do":"gallery","recipe":"R-…","try":1,"wish":"…"} 拿报价。什么都没扣。'
+    ok = consent(q['at']) if callable(consent) else {'why': NOT_YET}
+    if ok.get('why'):
+        return ok['why']
+    try:
+        r = await client.gallery_confirm(q['quote'], ok['words'])
+    except TownError as error:
+        if error.status == 404:
+            return GALLERY_CLOSED
+        return isle_fail(error)
+    if not isinstance(r, dict):
+        return f'岛上没回话，不知道确认了没有：先用 fishbowl_isle_look 查「我的」看一眼。{HONEST}'
+    said = clip(r.get('text') or '', TEXT_MAX)
+    if r.get('ok') is False:
+        _note(journal, f"你在聊天里想确认试画，没成：{clip(said or r.get('code'), 60)}")
+        if r.get('code') == 'closed':
+            return GALLERY_CLOSED
+        again = ('报价过期了（过了 2 小时、有了新报价、或者方子删了），重新试一次拿新报价。' if r.get('code') == 'old'
+                 else '岛上没认主人这句话是点头，等他明确说「画吧」再确认。' if r.get('code') == 'owner_said' else '')
+        return f"岛上回你的：「{said or '没确认'}」\n没确认（{clip(r.get('code') or '没说', 24)}）。{again}什么都没扣。{HONEST}"
+    gallery.confirmed(q['quote'])
+    paid = f"，{r['paid']} 鲸币" if r.get('paid') is not None else ''
+    src = _note(journal, f"你在聊天里确认了试画（{q['quote']}{paid}；主人说：「{clip(ok['words'], 40)}」）：{clip(said, 60)}")
+    if journal is not None and hasattr(journal, 'pin'):
+        try:
+            journal.pin(f"确认了试画：{clip(said or q['quote'], 60)}", src=src)
+        except Exception:  # noqa: BLE001 只是记一笔
+            pass
+    took = f"，扣了 {r['paid']} 鲸币" if r.get('paid') is not None else ''
+    return f"岛上回你的：「{said or '开画了'}」\n确认了（主人说「{clip(ok['words'], 40)}」{took}）。画好了挂上墙当样图，小镇会告诉你；没画成全退。{HONEST}"
+
+
+async def upload_owner_pic(client, gallery, owner_pic) -> dict:
+    """0.4.15 画廊：她写 "ref":"主人的图"：把主人 30 分钟内在私聊里发的最后一张图传上去，换成 u_ 号。→ {'id'} | {'why'}。"""
+    if gallery is None or client is None or not hasattr(client, 'gallery_upload') or not callable(owner_pic):
+        return {'why': NOT_YET}
+    try:
+        got = await owner_pic()
+    except Exception:  # noqa: BLE001 图读不出来（链接过期、下载失败）
+        return {'why': '主人发的那张图插件读不出来（可能过期了），请他再发一次。什么都没传。'}
+    if not got:
+        return {'why': '主人最近 30 分钟没在这里发图：等他在私聊里发了图，再写 "ref":"主人的图"。什么都没传。'}
+    data, ctype = got
+    if not data:
+        return {'why': '主人发的那张图是空的，请他再发一次。什么都没传。'}
+    if len(data) > UPLOAD_MAX:
+        return {'why': '主人发的那张图超过 8 MB，岛上不收；请他发小一点的。什么都没传。'}
+    ctype = ctype or image_type(data) or 'image/jpeg'
+    try:
+        r = await client.gallery_upload(data, ctype)
+    except TownError as error:
+        if error.status == 404:
+            return {'why': GALLERY_CLOSED}
+        if error.status == 413:
+            return {'why': '主人发的那张图太大，岛上不收；请他发小一点的。什么都没传。'}
+        return {'why': isle_fail(error)}
+    if not isinstance(r, dict) or r.get('ok') is False or not isinstance(r.get('upload_id'), str):
+        if isinstance(r, dict) and r.get('code') == 'busy':
+            return {'why': '一小时里传上去还没用掉的图已经有 12 张了：先把传上去的用掉，过一会儿再传。'}
+        why = (r.get('text') or r.get('code')) if isinstance(r, dict) else ''
+        return {'why': f"岛上没收这张图：{clip(why or '没说为什么', 80)}。"}
+    return {'id': r['upload_id']}

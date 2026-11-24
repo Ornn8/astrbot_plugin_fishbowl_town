@@ -400,6 +400,17 @@ def is_yes(text) -> bool:
     return bool(SHORT_RE.match(t) or YES_RE.search(t))
 
 
+def is_yes_to(text, yes=None, no=None) -> bool:
+    """0.4.15：别的要他点头的事（画廊试画「画吧」）：交楼那套之外再认 yes 里的话；no 里的（「不画」「别画」）一律不算。"""
+    raw = str(text if text is not None else '').lower().strip()
+    if no is not None and no.search(raw):
+        return False
+    if is_yes(text):
+        return True
+    t = _bare(raw)
+    return yes is not None and bool(t) and not NO_RE.search(raw) and not ASK_RE.search(raw) and bool(yes.search(t))
+
+
 # 0.4.12（11-23 一位 AstrBot 主人叫鱼交二楼，鱼说「插件看到的最后一行是 QQ 私聊里的系统时间戳」，「交吧」认不出来）：别的插件、平台给消息
 # 加上的时间、系统那种行不是他打的话。整行只有日期、时刻、星期、「当前时间 / 系统」这类字的，认他的话时拿掉；拿掉以后什么都不剩的那一条不记。
 _TIME_BITS = re.compile(
@@ -1160,15 +1171,16 @@ class Cobuild:
             pre = f"（主人刚改的存成了第 {sync['version']['n']} 版，留着。）\n" if sync.get('changed') else ''
             return self._out(pre + self.version_text(d, v, head), self.previews_of(d, v))
 
-    def _consent(self, key, since, what) -> dict:
+    def _consent(self, key, since, what, say: str = '', yes=None, no=None) -> dict:
+        """0.4.15：say / yes / no 给画廊试画用（「画吧」，gallery.py），别的用法不变。"""
         if not self.is_owner_chat(key):
             return {'why': f'{what}要主人在你们的私聊里亲口说，这个会话不算。'}
         w = self.owner_words.latest(key)
         hand = what.startswith('交')
-        say = '「交吧」' if hand else '「就这样」' if what == '确认室内' else '「盖吧」'
+        say = say or ('「交吧」' if hand else '「就这样」' if what == '确认室内' else '「盖吧」')
         if not w or w['at'] <= since:
             return {'why': f'主人看到以后还没在这里亲口说话。等他看过、明确说了{say}再用（插件重载过的话，请他再说一声）。什么都没交、没扣。'}
-        if not is_yes(w['text']):
+        if not (is_yes_to(w['text'], yes, no) if yes is not None or no is not None else is_yes(w['text'])):
             return {'why': f"主人最后说的是「{clip(w['text'], 40)}」，听着不像让你{'交' if hand else '确认'}。等他明确说{say}再用（插件只认他自己打的字）。什么都没交、没扣。"}
         return {'words': str(w['text']).strip()[:OWNER_WORDS_MAX]}
 
@@ -1583,3 +1595,7 @@ class Cobuild:
 
     def observe_owner(self, key, text, at: float | None = None):
         self.owner_words.observe(key, text, at)
+
+    def consent(self, key, since, what, say: str = '', yes=None, no=None) -> dict:
+        """0.4.15 画廊试画也用这一套（只认主人私聊、给他看过以后、他亲手打的、像点头）。"""
+        return self._consent(key, since, what, say, yes, no)
