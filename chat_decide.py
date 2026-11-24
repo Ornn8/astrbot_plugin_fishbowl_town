@@ -35,7 +35,9 @@ PIGGY_GAP_S = 30 * 60
 PIGGY_FOR_S = 15 * 60
 REPLY_WAIT_S = 10 * 60
 MISS_LIMIT = 2
-URGENT = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'meet_ask'}
+URGENT = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'meet_ask', 'guest', 'door'}
+# 0.4.13 客人上门、门后的比赛轮到她：排在「照她定的打算办」前面先回（不然她有自己的打算时客人没人回）；她的打算留着，下一回合照办
+SERVE = {'guest', 'door'}
 PLAN_MARK = '【小镇打算】'
 NOTE_ASKING = '在聊天里想想接下来去哪'
 NOTE_WAITING = '等聊天里的她定接下来做什么'
@@ -172,9 +174,11 @@ class ChatDecide:
         """None = 小镇那一问照旧拿主意；{'answer': json} = 插件直接回小镇；{'role': execute|rules|fallback|wake|pull}。"""
         if not self.on() or (turn or {}).get('kind') != 'agency':
             return None
+        reasons = [str(r) for r in (((turn or {}).get('packet') or {}).get('reasons') or [])]
+        if any(r in SERVE for r in reasons):
+            return {'role': 'rules'}
         if self.j.wish_is_own() and self.j.pending_wish():
             return {'role': 'execute'}
-        reasons = [str(r) for r in (((turn or {}).get('packet') or {}).get('reasons') or [])]
         if any(r in URGENT for r in reasons):
             return {'role': 'rules'}
         # 0.4.6（林小鱼 11-22「她调『去小镇』只回『等它开口』」）：聊天里的她用「去小镇」请小镇叫她（'pulled'，本机记着那句话）：

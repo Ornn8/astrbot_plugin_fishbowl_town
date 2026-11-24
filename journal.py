@@ -39,7 +39,9 @@ TOWN_WHO = ('小镇里的话和事就是你自己在小镇做的：插件另外�
             '去哪、做什么由你自己定：想去岛上哪儿、找谁、做点什么，就用 fishbowl_town_go 写下你的打算（plan），插件马上请那边照着去做。'
             '想让那边以后怎么替你做，用 fishbowl_town_rules 留守则（也能让某类事先停住等你一句）。认不认、要不要补一句或改口，由你。')
 # 必须她自己回答的拿主意理由（她歇着也叫醒）；没什么可做的理由
-MUST_ANSWER = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'pulled', 'meet_ask'}
+# 0.4.13：guest = 客人上门她的守店店、door = 门后的比赛轮到她（小镇 worldlink EVENT_WAKES）。客人押着钱等她，她说要歇着也叫醒
+#   （11-24 线上 20 家守店店约 430 件客人全作废：插件替她答了「先不动」）；主人定的勿扰时段照样算
+MUST_ANSWER = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'pulled', 'meet_ask', 'guest', 'door'}
 IDLE_REASONS = {'idle', 'fcode', 'ad', 'venue'}
 # 0.4.5：小镇到了她自己定的时间（她的 next_wake）来叫她：reasons 里带 'wake'（可能只有它）。这是她自己的一次拿主意，一定叫她的模型，
 # 不当成「没什么可做的」、也不当成她还在歇着（歇到的就是这会儿）；主人定的勿扰时段照样算（和 DSH 插件 0.9.8 一样）
