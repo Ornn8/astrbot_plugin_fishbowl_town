@@ -552,6 +552,22 @@ class FishbowlTown(Star):
         lines = self.journal.history(15)
         yield event.plain_result('她最近在小镇（新的在前）：\n' + '\n'.join(lines) if lines else '本机还没记下她在小镇的事。')
 
+    @town.command('spend')
+    async def town_spend(self, event: AstrMessageEvent):
+        """她在小镇和岛上花的钱：一笔一笔（新的在前）、一共里按类"""
+        yield event.plain_result(await self._spend_text())
+
+    async def _spend_text(self) -> str:
+        """0.4.13 逐笔显示花钱（money-day 11-24）：只给主人看，她的日记和小镇简报里照旧不放钱的数。"""
+        if not self.client:
+            return OFF_DUTY
+        try:
+            return render.spend(await self.client.spending(), self._her_name or '她')
+        except TownError as error:
+            if error.status in (400, 404) or error.code == 'HTTP_404':
+                return '这个小镇还不认这一项（等小镇更新）。'
+            return f'这会儿读不到小镇的账（{error.reason or error.code}），过一会儿再试。'
+
     @town.command('chats')
     async def town_chats(self, event: AstrMessageEvent, n: int = 0):
         """她最近的串门；/town chats 编号 看那一次的原话"""

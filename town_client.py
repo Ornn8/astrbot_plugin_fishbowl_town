@@ -222,6 +222,10 @@ class TownClient:
     async def settings(self, body: dict):
         return await self.request('POST', 'settings', body=body)
 
+    async def spending(self):
+        """0.4.13 逐笔显示花钱：今天 / 7 天 / 30 天 / 一共、by_kind、items（新小镇才有，一笔一笔，新的在前）。"""
+        return await self.request('GET', 'spending', timeout=8)
+
     async def album(self, limit: int = 30):
         return await self.request('GET', 'album', query={'limit': limit}, timeout=10)
 

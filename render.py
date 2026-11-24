@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import time
+from decimal import ROUND_HALF_UP, Decimal
 
 BJ = 8 * 3600
 VISIT_STATE = {'talking': '还在聊', 'done': '', 'not_home': '对方不在家', 'declined': '对方没开门', 'failed': '没聊成', 'knocking': '在敲门'}
@@ -102,4 +103,78 @@ def chat(one: dict | None, name: str = '她', n=None) -> str:
             out.append(f"{_nm(r) or '？'}：{r['text']}")
     if v.get('ending'):
         out.append(f"结尾：{_str(v['ending'], 80)}")
+    return '\n'.join(out)
+
+
+# --- 0.4.13 逐笔显示花钱（money-day 11-24，小镇 b0ffec75；和 DSH extras.js 的 billLine / renderSpend 同一套） -------------------------------
+# GET spending：today / d7 / d30 / total、by_kind（一共里按类，'.2f'）、items [{ts, day, kind, amount_yuan, coin?, label}]（新的在前，没有打牌的座位费）。
+# amount_yuan 正的是她付的、负的是退回来的；岛上的一笔四位小数；在别的鱼店里直接付鲸币的（isle_coin）amount_yuan '0'、coin 写几个。
+SPEND_KIND_ZH = {'places': '镇上的店', 'isle': '鱼缸岛', 'seat': '座位费', 'social': '请客送礼', 'paint': '画铺', 'visit': '串门', 'model': '模型',
+                 'ghost': '代写', 'other': '其他'}
+
+
+def yuan_exact(v) -> str:
+    """钱数照小镇给的写：至少两位小数，不到一分钱的写四位（¥0.0081）。不是数就是 ''。正负号由 bill_line 管。"""
+    s = re.sub(r'^[-+]', '', str(v if v is not None else '').strip())
+    if not re.fullmatch(r'\d+(\.\d+)?', s):
+        return ''
+    frac = (s.split('.')[1] if '.' in s else '').rstrip('0')
+    places = min(4, max(2, len(frac)))
+    return '¥' + str(Decimal(s).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP))
+
+
+def _num(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def bill_line(i) -> str:
+    """一笔账：时间（北京）  -¥0.0081 / -6 鲸币 / +¥0.50（退回来的）  说明。"""
+    if not isinstance(i, dict):
+        return ''
+    coin = round(_num(i.get('coin')))
+    amt = ''
+    raw = i.get('amount_yuan')
+    if i.get('kind') == 'isle_coin' or (_num(raw if raw not in (None, '') else 0, 1) == 0 and coin > 0):
+        amt = f'-{coin} 鲸币' if coin > 0 else ''
+    else:
+        y = yuan_exact(raw)
+        if y:
+            amt = ('+' if str(raw).strip().startswith('-') else '-') + y
+    ts = _num(i.get('ts'))
+    when = _when(ts / 1000 if ts > 1e12 else ts) if ts > 0 else ''
+    return '  '.join(x for x in (when, amt, _str(i.get('label') or i.get('note') or '', 100)) if x)
+
+
+def bill_lines(sp, n: int = 20) -> list:
+    return [x for x in (bill_line(i) for i in _arr((sp or {}).get('items') if isinstance(sp, dict) else None)) if x][:n]
+
+
+def spend_kinds_line(sp) -> str:
+    k = sp.get('by_kind') if isinstance(sp, dict) else None
+    if not isinstance(k, dict):
+        return ''
+    keys = [x for x in SPEND_KIND_ZH if x in k] + [x for x in k if x not in SPEND_KIND_ZH]
+    bits = [f'{SPEND_KIND_ZH.get(x, x)} {yuan_exact(k[x])}' for x in keys if _num(k[x]) > 0 and yuan_exact(k[x])]
+    return '一共里按类：' + '、'.join(bits) if bits else ''
+
+
+def spend(sp, name: str = '她', n: int = 20) -> str:
+    """/town spend：一共、按类、最近 n 笔。旧小镇没有 items 就只有总数；小镇没给账就一句话。"""
+    if not isinstance(sp, dict) or sp.get('total') is None:
+        return '小镇没给花钱的账（这个小镇还不认这一项，等小镇更新）。'
+
+    def y(v):
+        return yuan_exact(v) or '¥0.00'
+    out = [f"{name} 在小镇和岛上花的钱：今天 {y(sp.get('today'))} · 7 天 {y(sp.get('d7'))} · 30 天 {y(sp.get('d30'))} · 一共 {y(sp.get('total'))}"]
+    kinds = spend_kinds_line(sp)
+    if kinds:
+        out.append(kinds)
+    items = bill_lines(sp, n)
+    if items:
+        out += ['最近的账单（新的在前；打牌的座位费不在这里）：'] + [f'- {x}' for x in items]
+    elif isinstance(sp.get('items'), list):
+        out.append('最近没有账单。')
     return '\n'.join(out)
