@@ -149,21 +149,29 @@ def test_0415_gallery_words_before_the_quote_do_not_count_refusals_and_closed_re
     w.step(1)
     w.words.observe('main', '画吧')
 
-    async def old(quote, owner_words):
-        return {'ok': False, 'code': 'old', 'text': '这个报价过期了'}
-    w.client.gallery_confirm = old
-    r = w.act({'do': 'gallery_confirm', 'quote': Q})
-    assert '没确认（old）。报价过期了' in r and '什么都没扣' in r
-
     async def gone(quote, owner_words):
         raise TownError('HTTP_404', 404)
     w.client.gallery_confirm = gone
     assert w.act({'do': 'gallery_confirm', 'quote': Q}) == isle_tools.GALLERY_CLOSED
 
-    async def closed(quote, owner_words):
-        return {'ok': False, 'code': 'closed', 'text': '画廊还没开'}
-    w.client.gallery_confirm = closed
+    async def off(quote, owner_words):
+        return {'ok': False, 'code': 'gallery_off', 'text': '画廊还没开（镇上开了会说）。什么都没办、没扣'}
+    w.client.gallery_confirm = off
     assert w.act({'do': 'gallery_confirm', 'quote': Q}) == isle_tools.GALLERY_CLOSED
+
+    async def closed(quote, owner_words):
+        return {'ok': False, 'code': 'closed', 'text': '这家画廊关了：什么都没扣'}
+    w.client.gallery_confirm = closed
+    r = w.act({'do': 'gallery_confirm', 'quote': Q})
+    assert '这家画廊关了' in r and '没确认（closed）' in r
+    assert w.gallery.quote()['quote'] == Q, 'still waiting after 404 / off / closed'
+
+    async def old(quote, owner_words):
+        return {'ok': False, 'code': 'old', 'text': '这个报价过期了'}
+    w.client.gallery_confirm = old
+    r = w.act({'do': 'gallery_confirm', 'quote': Q})
+    assert '没确认（old）。报价过期了' in r and '什么都没扣' in r
+    assert w.gallery.quote() is None, 'the island said old: no longer waited for'
     # no quote at all
     v = World(tmp_path / 'v')
     assert '现在没有在等主人点头的试画报价' in v.act({'do': 'gallery_confirm'})

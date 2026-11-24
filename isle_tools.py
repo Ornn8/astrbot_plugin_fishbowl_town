@@ -286,8 +286,10 @@ async def confirm_try(client, w: dict, *, journal=None, gallery=None, consent=No
     said = clip(r.get('text') or '', TEXT_MAX)
     if r.get('ok') is False:
         _note(journal, f"你在聊天里想确认试画，没成：{clip(said or r.get('code'), 60)}")
-        if r.get('code') == 'closed':
+        if r.get('code') == 'gallery_off':        # 画廊还没对她开（岛上 OFF_TEXT / 只给测试的鱼）；closed 是「这家画廊关了」，照原话说
             return GALLERY_CLOSED
+        if r.get('code') in ('old', 'none'):      # 岛上说作废了 / 没有这个号：插件这边也不再等它
+            gallery.confirmed(q['quote'])
         again = ('报价过期了（过了 2 小时、有了新报价、或者方子删了），重新试一次拿新报价。' if r.get('code') == 'old'
                  else '岛上没认主人这句话是点头，等他明确说「画吧」再确认。' if r.get('code') == 'owner_said' else '')
         return f"岛上回你的：「{said or '没确认'}」\n没确认（{clip(r.get('code') or '没说', 24)}）。{again}什么都没扣。{HONEST}"
