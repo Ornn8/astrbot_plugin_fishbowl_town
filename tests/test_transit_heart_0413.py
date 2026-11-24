@@ -15,7 +15,7 @@ from astrbot_plugin_fishbowl_town.prompts import build_turn_prompt, hold_check, 
 def test_execute_far_shop_is_written_as_usual():
     turn = {'kind': 'agency', 'packet': {'actions': ['none'], 'messages': [{'role': 'system', 'content': '规则'}, {'role': 'user', 'content': '情况'}], 'reply': {'format': 'json'}}}
     text = build_turn_prompt(turn, role='execute', wish='去面包房买可颂', wish_own=True)
-    assert '现在真办不了（关门、没这个），action 填 none' in text and '远的店照样写，小镇会带你走过去，到了照办。' in text
+    assert '现在真办不了（关门、没这个、去不了），action 填 none' in text and '远的店照样写，小镇会带你走过去，到了照办。' in text
     assert '还没走到' not in text
 
 

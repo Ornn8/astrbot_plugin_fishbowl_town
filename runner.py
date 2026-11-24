@@ -14,7 +14,7 @@ from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
 from .build import SKIP, build_again, build_max_chars, build_note, build_prompt, build_within_s, is_build, read_build
 from .isle import Isle, PicsRefused, isle_ask_of, isle_version_of, isle_within_s, stops_of, stops_text, unattach
-from .journal import play_of
+from .journal import cant_why, play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
 
@@ -135,13 +135,20 @@ class Runner:
             if route and route.get('answer'):
                 await self._post(tid, route['answer'], turn, received)
                 self.stats['chat_decide'] = self.stats.get('chat_decide', 0) + 1
-                self.log.info(f'拿主意的回合 {tid}：等聊天里的她定，小镇那边先等一会儿')
+                if route.get('quiet'):      # 0.4.14 没新事不叫 B
+                    self.stats['quiet_wake'] = self.stats.get('quiet_wake', 0) + 1
+                self.log.info(f"拿主意的回合 {tid}：{'问过她、她没定，小镇也没新事，不叫她的模型，等下次在聊天里问她' if route.get('quiet') else '等聊天里的她定，小镇那边先等一会儿'}")
                 return
             role = (route or {}).get('role', '')
             rules = {'text': j.rules(), 'hold': j.holds()}
             mind = {'rules': rules}
+            # 0.4.14：手上的打算带状态（在等 / 上次没办成）；她在主聊天里用岛上工具刚做的事钉在自己那一块（D）
+            held = j.wish_state() if kind == 'agency' else None
+            pin_list = j.pins() if kind == 'agency' else []
             if kind == 'agency':
-                mind.update(recent=j.recent_for_agency(), wish=j.pending_wish(), wish_own=j.wish_is_own(), role=role)
+                mind.update(recent=j.recent_for_agency(), wish=held['text'] if held else '', wish_own=bool(held and held['own']), role=role,
+                            wish_blocked=bool(held and held['st'] == 'blocked'), wish_why=(held or {}).get('why') or '',
+                            pins=[f"- {p['line']}" for p in pin_list])
             if kind == 'visit':
                 plan = (j.pending_wish() if j.wish_is_own() else '') or j.doing()
                 if plan:
@@ -246,27 +253,43 @@ class Runner:
                 self.stats['late'] += 1
                 return
             decided = None
+            verdict, why = '', ''
             if kind == 'agency':
                 try:
                     # 0.4.10 岛上的计划回合 / 短唤醒（isle_ask_of）：她的回答原样交（不写 next_wake、不改 plan.hours、不动 stops），下次什么时候问她由小镇按她的几站定
                     ask = isle_ask_of(turn)
-                    decided = j.settle(json.loads(answer), self.quiet(), isle=ask)
+                    obj = json.loads(answer)
+                    # 0.4.14（A）：她写的 "wish":"done" | "blocked" 是插件自己读的，读完拿掉再交；没写 = 以前的样子
+                    said = str(obj.get('wish') or '').strip().lower() if isinstance(obj, dict) and isinstance(obj.get('wish'), str) else ''
+                    if said in ('done', 'blocked'):
+                        obj.pop('wish', None)
+                    decided = j.settle(obj, self.quiet(), isle=ask)
+                    cant = isinstance(decided, dict) and str(decided.get('note') or '').startswith('办不了')
+                    if held:
+                        if said == 'blocked' or (cant and held['st'] != 'blocked'):
+                            verdict = 'blocked'
+                        elif said == 'done' or (role == 'execute' and held['st'] != 'blocked'):
+                            verdict = 'done'
+                        if verdict == 'blocked':
+                            why = cant_why(decided.get('note') if isinstance(decided, dict) else '') or str((decided or {}).get('note') or '')[:60]
                     # 0.4.0：照她在聊天里定的办的，note 标一下（小镇那边数得出；主人在「战绩」里看得到）
-                    marked = role == 'execute' and isinstance(decided, dict) and not str(decided.get('note') or '').startswith('办不了')
+                    marked = role == 'execute' and isinstance(decided, dict) and verdict != 'blocked' and not cant
                     if marked:
                         decided['note'] = (NOTE_EXECUTED + ('：' + str(decided['note']) if decided.get('note') else ''))[:200]
-                    if not ask or marked:
+                    if not ask or marked or said in ('done', 'blocked'):
                         answer = json.dumps(decided, ensure_ascii=False)
                     if ask:
                         self.log.info(f'岛上的{"计划回合" if ask == "plan" else "短唤醒"} {tid}：{isle_said(ask, decided)}')
                 except ValueError:
                     decided = None
             await self._post(tid, answer, turn, received)
+            if kind == 'agency' and pin_list:
+                j.pins_seen([p['text'] for p in pin_list])   # 0.4.14（D）：当场办完的那种带进过一次就松开
             if decided:
-                j.decision(decided)
+                j.decision(decided, wish={'ts': held['ts'], 'verdict': verdict, 'why': why} if held else None)
                 if role and self.decide:
                     try:
-                        self.decide.after(role, decided)
+                        self.decide.after(role, decided, {'wish': held, 'verdict': verdict, 'why': why} if held else None)
                     except Exception:  # noqa: BLE001 - 只是记一笔
                         pass
             if kind == 'game':   # 牌桌上这一手记进本子，那局打完时连同结果给聊天里的她

@@ -13,7 +13,13 @@ from .isle import stops_of, stops_text
 from .prompts import GAME_ZH, HOLD_KINDS
 
 KEEP = 400                 # 0.3.3：小镇的事全部进聊天（主人 11-17「我要的是全部内容」），多记一些（40 -> 400）
-WISH_FOR = 2 * 3600
+# 0.4.14（A，协调 11-24 批；和 DSH 0.9.18 同一套）：打算办到、或者说办不成为止（最多 6 小时），不再「拿过一次主意就删」
+WISH_FOR = 6 * 3600
+# 0.4.14（D）：她在主聊天里用岛上工具刚做的事，钉进小镇拿主意的回合（最多 2 件、每件 80 字；办完或 2 小时就松开）
+PIN_S = 2 * 3600
+PIN_KEEP = 2
+PIN_HEAD = '【你在主聊天里刚做的（主人在场定的，这里别改它）】'
+NOTE_EXECUTED_RE = re.compile(r'^照你在聊天里定的[：:]?')
 RULES_MAX = 500
 HELD_KEEP = 8
 WAKE_MIN, WAKE_MAX = 5, 480
@@ -57,6 +63,35 @@ def short(s, n: int) -> str:
 
 def clock(ts: float) -> str:
     return time.strftime('%m-%d %H:%M', time.gmtime(ts + BJ))
+
+
+def wish_receipt(e: dict, kept: bool = False) -> str:
+    """0.4.14（C）：拿主意时她手上有打算，那一回合给聊天里的她看的一句。办了：「照你说的：…」；办不成：「你想「…」，没办成：原因（，打算还留着）」。
+    别的（她自己改了主意、没写办没办）-> ''，照旧写「你在小镇定了」。"""
+    if not isinstance(e, dict) or not e.get('wish'):
+        return ''
+    own = bool(e.get('wish_own'))
+    if e.get('wish_blocked'):
+        return f"{'你想' if own else '主人想让你'}「{short(e['wish'], 40)}」，没办成：{short(e.get('why') or '没说为什么', 40)}{'，打算还留着' if kept else ''}"
+    if e.get('wish_done'):
+        return describe_decision({**e, 'note': NOTE_EXECUTED_RE.sub('', str(e.get('note') or '')).strip()}, '照你说的' if own else '照主人说的')
+    return ''
+
+
+def cant_why(note) -> str:
+    """「办不了：原因」里的原因。"""
+    m = re.match(r'^办不了[：:\s]*(.*)$', str(note or ''), re.S)
+    return m.group(1).strip() if m else ''
+
+
+def eta_of(text) -> float:
+    """岛上回的那句话里「N 分钟到」/「共 N 分钟」：要走多久（分钟），没有就 0。"""
+    m = re.search(r'([\d.]+)\s*分钟到', str(text or '')) or re.search(r'共\s*([\d.]+)\s*分钟', str(text or ''))
+    try:
+        n = float(m.group(1)) if m else 0.0
+    except ValueError:
+        n = 0.0
+    return min(120.0, n) if n > 0 else 0.0
 
 
 def describe_decision(d: dict, who: str = '你决定') -> str:
@@ -150,7 +185,8 @@ class Journal:
         self.save()
 
     # --- 小镇那边拿的主意、小镇传回来的事 -------------------------------------------------------------------------------
-    def decision(self, a: dict):
+    def decision(self, a: dict, wish: dict | None = None):
+        """wish（0.4.14）= 这一回合带进去的打算 {ts, verdict: 'done' | 'blocked' | '', why}（runner 读她回答里的 "wish" 字段、「办不了：」）。"""
         d = {'kind': 'decision', 'action': str(a.get('action') or 'none'), 'game': str(a.get('game') or ''), 'target': str(a.get('target') or ''),
              'place': str(a.get('place') or ''), 'note': short(a.get('note'), 120), 'intent': short(a.get('intent') or a.get('want'), 120),
              'say': short(a.get('say'), 120), 'next_wake': a.get('next_wake') if isinstance(a.get('next_wake'), int) else None}
@@ -160,9 +196,21 @@ class Journal:
         w = a.get('wake') if isinstance(a.get('wake'), dict) else None
         if w and isinstance(w.get('choice'), str) and w['choice']:
             d['wake'] = short(w['choice'], 8)
-        if self.s.get('wish'):   # 主人托的话：她拿过一次主意就算带到了
-            d['wish'], d['wish_own'] = self.s['wish']['text'], bool(self.s['wish'].get('own'))
-            del self.s['wish']
+        # 主人托的话 / 她的打算：没写办没办，拿过一次主意就算带到了（和以前一样）；0.4.14 办不成的留着（最多 6 小时），记下为什么
+        w = self.s.get('wish')
+        verdict = (wish or {}).get('verdict') or ''
+        same = bool(w) and (not wish or not wish.get('ts') or wish.get('ts') == w.get('ts'))
+        if w and same and w.get('st') == 'blocked' and verdict not in ('done', 'blocked'):
+            pass                     # 上次没办成、这回合只是顺带看到：留着，这一条不算它的回执
+        elif w and same:
+            d['wish'], d['wish_own'] = w['text'], bool(w.get('own'))
+            if verdict == 'blocked':
+                d['wish_blocked'], d['why'] = True, short((wish or {}).get('why') or '没说为什么', 60)
+                self.s['wish'] = {**w, 'st': 'blocked', 'why': d['why'], 'at': self.now()}
+            else:
+                if verdict == 'done':
+                    d['wish_done'] = True
+                del self.s['wish']
         self._add(d)
 
     # --- 一局里那边替她出的每一手（DSH 0.7.11） ------------------------------------------------------------------------
@@ -223,15 +271,22 @@ class Journal:
         t = short(str(text or '').split('\n')[0].lstrip('· '), limit)
         if t:
             self._add({'kind': 'event', 'ev': kind, 'tag': tag, 'text': t})
+        return t   # 0.4.14：记下的那一行（D 钉住时认它，「最近」里不重复）
+
+    def _kept_now(self, e: dict) -> bool:
+        """这条回执说的打算现在还留着（办不成、还没过 6 小时、没换成别的）。"""
+        w = self.s.get('wish') or {}
+        return bool(e.get('wish_blocked') and w.get('st') == 'blocked' and w.get('text') == e.get('wish') and self.now() - w.get('ts', 0) <= WISH_FOR)
 
     def decision_lines(self, n: int = 2) -> list:
-        return [short(describe_decision(e, TOWN_DECIDED), 60) for e in self.s['journal']
+        return [short(wish_receipt(e, self._kept_now(e)) or describe_decision(e, TOWN_DECIDED), 60) for e in self.s['journal']
                 if e['kind'] == 'decision' and self.now() - e['ts'] < 86400][:n]
 
     def recent_for_agency(self, n: int = 5) -> list:
         """给小镇那边拿主意时看的几行：它自己最近做过什么。"""
+        pinned = {p['src'] for p in self.pins() if p.get('src')}   # 0.4.14：钉着的那几件在自己那一块里，这里不重复
         return [f"{clock(e['ts'])} {describe_decision(e) if e['kind'] == 'decision' else e['text']}"
-                for e in self.s['journal'] if e['kind'] != 'wish'][:n]
+                for e in self.s['journal'] if e['kind'] != 'wish' and not (e['kind'] == 'event' and e.get('text') in pinned)][:n]
 
     def fresh(self, since: float) -> list:
         """上次放过之后小镇里刚发生的事（打完的牌、串门、照片、送东西、她自己做的事和成没成），给她聊天里的「你刚才在小镇」。
@@ -247,11 +302,16 @@ class Journal:
             lines.append(f'你给小镇那边留的守则：「{self.rules()}」')
         if self.holds():
             lines.append(f"你让小镇那边先停住、等你一句的事：{'；'.join(HOLD_KINDS[k] for k in self.holds())}。")
+        ow = self.wish_state()     # 0.4.14
+        if ow and ow['st'] == 'blocked':
+            lines.append(f"{'你想' if ow['own'] else '主人想让你'}「{ow['text']}」，小镇回合没办成：{ow.get('why') or '没说为什么'}。"
+                         f"打算还留着（最多到 {clock(ow['ts'] + WISH_FOR)}），下次拿主意时还会看到；想换就用 fishbowl_town_go 写新的。")
         items = self.s['journal'][:8]
         if items:
             lines += ['', '最近（新的在前）：']
             for e in items:
-                body = describe_decision(e, TOWN_DECIDED) if e['kind'] == 'decision' else (
+                rc = wish_receipt(e, self._kept_now(e)) if e['kind'] == 'decision' else ''
+                body = rc or describe_decision(e, TOWN_DECIDED) if e['kind'] == 'decision' else (
                     (f"你跟主人说想：「{e['text']}」" if e.get('own') else f"主人跟你说：「{e['text']}」") if e['kind'] == 'wish' else e['text'])
                 lines.append(f"- {clock(e['ts'])} {body}")
         else:
@@ -262,7 +322,10 @@ class Journal:
         """/town history：给主人看的，写成「她」。"""
         out = []
         for e in self.s['journal'][:n]:
-            if e['kind'] == 'decision':
+            rc = wish_receipt(e) if e['kind'] == 'decision' else ''
+            if rc:
+                body = re.sub(r'^照你说的', '照她说的', re.sub(r'^主人想让你', '你想让她', re.sub(r'^你想', '她想', rc)))
+            elif e['kind'] == 'decision':
                 body = describe_decision(e, '小镇那边替她定了')
             elif e['kind'] == 'wish':
                 body = f"她跟你说想：「{e['text']}」" if e.get('own') else f"你跟她说：「{e['text']}」"
@@ -275,21 +338,72 @@ class Journal:
     def wish(self, text: str, own: bool = False):
         t = short(scrub_text(text) or '主人想让你去小镇玩', 200)     # 0.4.14：这句话会带进小镇回合，存之前去掉网址、邮箱、@谁、数字串
         again = (self.s.get('wish') or {}).get('text') == t
-        self.s['wish'] = {'text': t, 'ts': self.now(), **({'own': True} if own else {})}
+        self.s['wish'] = {'text': t, 'ts': self.now(), **({'own': True} if own else {})}   # 0.4.14：没有 st = 在等；同一句话再说一遍（办不成以后）= 再试
         if again:
             self.save()
         else:
             self._add({'kind': 'wish', 'text': t, **({'own': True} if own else {})})
 
     def pending_wish(self) -> str:
+        """0.4.14：只有「在等」的算；办不成留着的看 wish_state()。"""
+        w = self.wish_state()
+        return w['text'] if w and w['st'] != 'blocked' else ''
+
+    def wish_state(self) -> dict | None:
+        """0.4.14：手上的打算 {text, ts, own, st: 'pending' | 'blocked', why, at, pulled, pull_after}；过了 6 小时就删。"""
         w = self.s.get('wish')
         if not w:
-            return ''
+            return None
         if self.now() - w['ts'] > WISH_FOR:
             del self.s['wish']
             self.save()
-            return ''
-        return w['text']
+            return None
+        return {**w, 'own': bool(w.get('own')), 'st': 'blocked' if w.get('st') == 'blocked' else 'pending'}
+
+    def wish_pulled(self, ts: float, ok: bool = True, retry_s: float = 0):
+        """0.4.14（没新事不叫 B）：插件自己请小镇叫她一次：记下请过了 / 下次什么时候再请。"""
+        w = self.s.get('wish')
+        if not w or w.get('ts') != ts:
+            return
+        if ok:
+            w['pulled'] = self.now()
+        else:
+            w.pop('pulled', None)
+            w['pull_tries'] = int(w.get('pull_tries') or 0) + 1
+            w['pull_after'] = self.now() + max(60.0, float(retry_s or 0))
+        self.save()
+
+    # --- 0.4.14（D）主聊天里刚做的事 -----------------------------------------------------------------------------------------
+    def pin(self, text: str, eta_min: float = 0, src: str = ''):
+        """她在主聊天里用岛上工具刚做成的事。eta_min：要走多久（到了就松开）；没有 = 当场办完的，带进一个回合就松开。src：日记里那一条。"""
+        t = short(text, 80)
+        if not t:
+            return
+        at = self.now()
+        keep = [p for p in self.s.get('chat_did') or [] if isinstance(p, dict) and p.get('until', 0) > at and p.get('text') != t]
+        until = at + min(PIN_S, (eta_min + 3) * 60 if eta_min > 0 else PIN_S)
+        keep.insert(0, {'text': t, 'at': at, 'until': until, **({} if eta_min > 0 else {'once': True}), **({'src': short(src, 600)} if src else {})})
+        self.s['chat_did'] = keep[:PIN_KEEP]
+        self.save()
+
+    def pins(self) -> list:
+        """钉着的几件（到点的、当场办完又已经带进过回合的松开）。-> [{text, at, src, line}]"""
+        t = self.now()
+        allp = [p for p in self.s.get('chat_did') or [] if isinstance(p, dict)]
+        live = [p for p in allp if p.get('until', 0) > t and not (p.get('once') and p.get('seen'))]
+        if len(live) != len(self.s.get('chat_did') or []):
+            self.s['chat_did'] = live
+            self.save()
+        return [{'text': p['text'], 'at': p['at'], 'src': p.get('src') or '', 'line': f"{clock(p['at'])} {p['text']}"} for p in live]
+
+    def pins_seen(self, texts):
+        """这几件已经跟着一个交上去的回合进过小镇了（当场办完的那种就此松开）。"""
+        hit = False
+        for p in self.s.get('chat_did') or []:
+            if isinstance(p, dict) and p.get('text') in texts and not p.get('seen'):
+                p['seen'] = hit = True
+        if hit:
+            self.save()
 
     def wish_is_own(self) -> bool:
         return bool((self.s.get('wish') or {}).get('own'))

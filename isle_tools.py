@@ -18,6 +18,7 @@ import time
 
 from .isle import NO_PICS_HEAD, CIRCLED, pics_of
 from .town_client import TownError
+from .journal import eta_of
 
 LOOK_TOPICS = ('我的', '地', '楼', '铺位', '店', '玩的', '订单', '缺的', '统计', '镇规', '怎么做', '我的店', '价', '地图', '样子', '田', '镇民')   # 0.4.9：镇民（小镇 11-24 四层镇民）；0.4.11：玩的（小镇 11-23 play.py）
 # 小镇的 TOPICS 还有「住宿」：11-23 线上查它只回「按房间住宿、出租还没开」，等岛上开了再加
@@ -191,9 +192,10 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     def note(t):
         try:
             if journal is not None:
-                journal.event('self', t)
+                return journal.event('self', t) or ''
         except Exception:  # noqa: BLE001 只是记一笔
             pass
+        return ''
 
     ref = new_ref()
     r = None
@@ -216,7 +218,13 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
         return f'岛上没回话，不知道办没办成：先用 fishbowl_isle_look 查「我的」看一眼。{HONEST}'
     ok = r.get('ok') is not False
     said = clip(r.get('text') or ('办了' if ok else '没办成'), TEXT_MAX)
-    note(f"你在聊天里{'' if ok else '想'}在岛上{what}{'' if ok else '，没成'}：{clip(said, 80)}{f'（主人说：「{clip(words, 40)}」）' if words else ''}")
+    src = note(f"你在聊天里{'' if ok else '想'}在岛上{what}{'' if ok else '，没成'}：{clip(said, 80)}{f'（主人说：「{clip(words, 40)}」）' if words else ''}")
+    # 0.4.14（D）：办成的钉进接下来的小镇回合（主人在场定的，那边别改它）；要走的到了就松开，当场办完的带进一个回合就松开
+    if ok and journal is not None and hasattr(journal, 'pin'):
+        try:
+            journal.pin(f'{what}：{clip(said, 60)}', eta_min=eta_of(said), src=src)
+        except Exception:  # noqa: BLE001 只是记一笔
+            pass
     queued = ok and r.get('code') == 'queued'   # 0.4.13：远处下单先出发，到了才办（小镇 auto-transit 11-24），这会儿还没办完
     head = '还没办完：出发了，到了照办，办好了小镇下一回合告诉你' if queued else '办成了' if ok else f"没办成（{clip(r.get('code') or '没说', 24)}）"
     return f'岛上回你的：「{said}」\n{head}。{HONEST}'

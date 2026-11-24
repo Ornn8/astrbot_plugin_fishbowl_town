@@ -17,11 +17,11 @@ from astrbot.api.star import Context, Star, StarTools
 
 from . import isle_tools, render, updater
 from .bridge import life_from_history, scrub_life
-from .chat_decide import PLAN_MARK, ChatDecide, strip_plan
+from .chat_decide import PLAN_MARK, ChatDecide, strip_plan, wish_pull_due
 from .chat_home import ChatHome
 from .context_note import TownNote
 from .guide import guide_text
-from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED
+from .journal import Journal, describe_decision, parse_quiet, TOWN_DECIDED, wish_receipt
 from .prompts import HOLD_KINDS, SILENT
 from .isle import PicsRefused
 from .runner import Runner
@@ -32,13 +32,14 @@ from .cobuild import WATCH_S, Cobuild, at_of, blender_text, numbers_line
 # 0.4.2 岛上查到的图：模型明说不收图的错（OpenAI / Gemini / Claude / DeepSeek 各家的说法），记一天
 PICS_REFUSED = re.compile(r'image|vision|multimodal|multi-modal|image_url|不支持.{0,6}图|图片', re.I)
 NO_PICS_S = 86400
+WISH_PULL_S = 60   # 0.4.14：多久看一次手上压着的打算该不该自己请小镇叫她
 
 try:
     from astrbot.core.agent.message import TextPart
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.13'
+VERSION = '0.4.14'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -69,6 +70,7 @@ class FishbowlTown(Star):
         asyncio.create_task(self._start())
         self._update_loop_task = asyncio.create_task(self._update_loop())
         self._build_loop_task = asyncio.create_task(self._build_loop())
+        self._wish_loop_task = asyncio.create_task(self._wish_loop())
 
     # --- 值班 -------------------------------------------------------------------------------------------------------------
     async def _start(self):
@@ -103,6 +105,8 @@ class FishbowlTown(Star):
             self._update_loop_task.cancel()
         if self._build_loop_task and not self._build_loop_task.done():
             self._build_loop_task.cancel()
+        if self._wish_loop_task and not self._wish_loop_task.done():
+            self._wish_loop_task.cancel()
         if self.runner:
             await self.runner.stop()
         if self.client:
@@ -291,6 +295,31 @@ class FishbowlTown(Star):
                   '用一两句你自己的话跟他说说你看到他改了哪里（不用把数字都念一遍，也不用问他要不要交）。只输出你要发给他的话。')
         asyncio.create_task(self._tell(prompt))
         return True
+
+    async def _wish_loop(self):
+        """0.4.14（没新事不叫 B）：手上压着在等的打算（主人托的话、她自己定的），过了她该醒的时间、问过她的那一下也过了，小镇还没叫她
+        （小镇 wake_quiet：长的到点没新事就不叫）：插件自己请小镇叫她一次。办不成留着的不请（等她改，或者下次自然醒来顺带看）。"""
+        while True:
+            await asyncio.sleep(WISH_PULL_S)
+            try:
+                if not self.client or not self.runner:
+                    continue
+                j = self.journal
+                w = j.wish_state()
+                due = max(float((j.s.get('wake') or {}).get('at') or 0), self.decide.follow_until() if self.decide else 0.0)
+                if not wish_pull_due(w, now=time.time(), due=due, may_pull=bool(w) and j.may_pull(parse_quiet(self.config.get('quiet_hours')))):
+                    continue
+                j.wish_pulled(w['ts'])
+                try:
+                    await self.client.agency()
+                    logger.info(f"[鱼缸小镇] 手上有打算（「{str(w['text'])[:20]}」），已请小镇给她一个拿主意的回合")
+                except TownError as error:
+                    j.wish_pulled(w['ts'], ok=False, retry_s=float(getattr(error, 'retry_after', 0) or 60))
+                    logger.debug(f'[鱼缸小镇] 请小镇叫她没请到：{error.code}')
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - 下一次再看
+                logger.debug(f'[鱼缸小镇] 看手上的打算出错：{error!r}')
 
     async def _build_loop(self):
         """有正在盖的楼时每隔几秒看一眼 house.blend（cobuild.tick）。"""
@@ -646,6 +675,10 @@ class FishbowlTown(Star):
             await asyncio.sleep(1)
             d = next((e for e in self.journal.s['journal'][:3] if e['kind'] == 'decision' and e.get('wish') == text), None)
             if d:
+                # 0.4.14（C）：带着这件事的那一回合办了 / 没办成，照实说；别的照旧
+                rc = wish_receipt(d, bool(d.get('wish_blocked') and (self.journal.wish_state() or {}).get('st') == 'blocked'))
+                if rc:
+                    return f'{rc}。\n（这是小镇会话刚办的，照实告诉主人。）'
                 return f'{describe_decision(d, TOWN_DECIDED)}。\n（这是你在小镇刚定的；照实告诉主人。）'
         return '已经请小镇给你一个拿主意的机会，这句话那边也记着了；定下来以后会出现在小镇近况里。'
 
