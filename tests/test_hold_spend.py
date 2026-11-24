@@ -24,4 +24,12 @@ def test_spend_hold_takes_out_the_small_piggy_spends_and_keeps_seat_fees_and_har
                  {'action': 'pier', 'pier': {'do': 'bottle', 'text': '你好'}}, {'action': 'none', 'want': '去广场转转'}):
         assert hold_check('agency', json.dumps(free, ensure_ascii=False), ['spend'])[0] == [], free
     assert hold_check('agency', json.dumps({'action': 'pier', 'pier': {'do': 'fish'}}), ['promise'])[0] == []
-    assert not any(w in HOLD_KINDS['spend'] for w in ('钓鱼', '电玩城', '手作')) and '座位费不算' in HOLD_KINDS['spend']   # 0.4.13：老镇停了，说明里不再列（拦的代码照旧）
+    assert '电玩城' in HOLD_KINDS['spend']   # 0.4.13 第三版：电玩城是一条鱼的店，照开，说明里列着
+    assert not any(w in HOLD_KINDS['spend'] for w in ('钓鱼', '手作')) and '座位费不算' in HOLD_KINDS['spend']   # 0.4.13：老镇停了，说明里不再列（拦的代码照旧）
+
+
+def test_world_arcade_held_0413():
+    found, clean = hold_check('agency', json.dumps({'action': 'none', 'world': {'do': 'arcade', 'machine': '投篮机'}, 'note': '想玩'}, ensure_ascii=False), ['spend'])
+    assert found == ['去电玩城玩机器（投篮机）'] and json.loads(clean) == {'action': 'none', 'note': '想玩'}
+    assert hold_check('agency', json.dumps({'action': 'none', 'world': {'do': 'walk', 'to': '镜湖'}}), ['spend'])[0] == []
+    assert hold_check('agency', json.dumps({'action': 'none', 'world': {'do': 'arcade', 'machine': '投篮机'}}), ['promise'])[0] == []

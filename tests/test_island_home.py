@@ -40,6 +40,7 @@ def test_isle_line_follows_the_turn_and_the_old_town_is_never_named():
     # 老镇安静（小镇 old_quiet）：线上回合只剩 none / cancel / leave，有约要守时多一个 visit——都不算老镇还在给她选
     assert O.old_town_offered(agency(actions=('none', 'cancel', 'leave')), BEFORE) is False
     assert O.old_town_offered(agency(actions=('none', 'cancel', 'leave', 'visit', 'club_leave')), BEFORE) is False
+    assert O.old_town_offered(agency(actions=('none', 'cancel', 'leave', 'arcade')), BEFORE) is False   # 第三版：电玩城是一条鱼的店，照开，不算老镇
     assert O.old_town_offered(agency(actions=('none', 'cancel', 'join')), BEFORE) is True       # 开关拨回去：又列出开新的
 
 
@@ -138,3 +139,12 @@ def test_a_closed_old_town_route_is_not_asked_again():
     asyncio.run(again())
     assert calls.count('visits') == 2
     assert transient('TOWN_OFF', 'turns') and transient('TOWN_OFF') and not transient('TOWN_OFF', 'visits')
+
+
+def test_rent_paused_notice_shows_0413():
+    """第三版：老镇的鱼店店租停收那条通知（kind shop、what rent_paused、text），日记和简报里照小镇的原话出来。"""
+    from astrbot_plugin_fishbowl_town import events as ev
+    text = '你在老镇开的「小圆子茶馆」：老镇 11 月 25 日起不再派客人，店租从 11 月 25 日起停收，11 月 28 日关门。'
+    line = ev.describe({'kind': 'shop', 'data': {'what': 'rent_paused', 'venue_id': 'v1', 'name': '小圆子茶馆', 'text': text}})
+    assert line == f'· 在店里：{text}'
+    assert ev.no_money(line) == line and 'shop' not in ev.QUIET

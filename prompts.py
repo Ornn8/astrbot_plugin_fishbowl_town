@@ -14,7 +14,7 @@ GAME_ZH = {
 SILENT = '[沉默]'
 
 # 她可以让小镇那边先停住、等她一句的几类事（守则里的硬开关）
-HOLD_KINDS = {'spend': '请客、送礼、拍照点歌、请人画、出游聚会这些从存钱罐出的小钱（打牌的座位费不算）', 'promise': '答应约定、约见面、许诺以后做什么'}
+HOLD_KINDS = {'spend': '请客、送礼、拍照点歌、请人画、出游聚会、电玩城这些从存钱罐出的小钱（打牌的座位费不算）', 'promise': '答应约定、约见面、许诺以后做什么'}
 
 
 def text_of(content) -> str:
@@ -115,6 +115,10 @@ def hold_check(kind: str, answer: str, hold) -> tuple[list, str]:
                     obj.pop(k, None)
                 if obj.get('action') == bare:
                     obj['action'] = 'none'
+            w = obj.get('world') if isinstance(obj.get('world'), dict) else None
+            if w and w.get('do') == 'arcade':   # 0.4.13（oldtown-close 第三版）：岛上 world 里的电玩城，小镇转给电玩城办、照样花钱，一样停住
+                found.append(f"去电玩城玩机器{_said(w.get('machine'))}")
+                del obj['world']
             if isinstance(obj.get('want'), str) and WANT_SPEND.search(obj['want']):
                 found.append(f"想做的事要花钱{_said(obj['want'])}")
                 del obj['want']

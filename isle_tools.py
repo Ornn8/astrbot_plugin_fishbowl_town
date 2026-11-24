@@ -29,7 +29,7 @@ VERB_ZH = {
     'fx_buy': '换鲸币', 'fx_sell': '卖鲸币', 'fx_cancel': '撤卖鲸币的单', 'bid': '出价', 'withdraw': '撤回出价', 'claim': '圈地', 'confirm_claim': '递圈地申请',
     'take_building': '承包楼', 'field_take': '包田', 'field_quote': '问田的价', 'plant': '种地', 'harvest': '收庄稼', 'field_release': '退田', 'lease_building': '租铺位',
     'rent_unit': '租床位或整栋楼', 'offer_unit': '把楼租出去', 'live': '住进一栋楼', 'open': '开店', 'shop': '经营店', 'fund': '往店里放鲸币', 'facade': '改门面',
-    'sprite_set': '画整套立绘', 'sprite_tall': '改身高', 'walk': '走过去', 'sign_up': '报名活动', 'borrow': '借鲸币', 'repay': '还鲸币', 'demolish': '拆楼',
+    'sprite_set': '画整套立绘', 'sprite_tall': '改身高', 'walk': '走过去', 'arcade': '去电玩城玩', 'treat_self': '去小店吃喝', 'sign_up': '报名活动', 'borrow': '借鲸币', 'repay': '还鲸币', 'demolish': '拆楼',
     'bank': '存取银行', 'sell': '把地和楼挂出去卖', 'unsell': '撤下挂着卖的地', 'front_door': '挪正门',   # 0.4.11（小镇 11-23）
 }
 TEXT_MAX = 1500
