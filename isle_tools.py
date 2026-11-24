@@ -5,7 +5,7 @@ DSH 插件 lib/isle-tools.js 的 Python 版）。岛上的事原来只能在小�
     fishbowl_isle_act   在岛上做一件事（POST isle/act {world, ref}）：和回合里写的 world 一模一样；岛上回的那句话原样给她
 两个口子除了接入码不对、小镇没开外来的鱼、小镇太忙，都回 200 {ok, code, text}：text 原样给她。
 旧小镇没有这两个口子（404）：照实说还没开，指回「去小镇」（把打算带进回合里办），不报错。
-花主人饭票（真钱）画整套立绘（sprite_set）：要主人在这段聊天里叫她做或点了头，owner_words 填他的原话，没有就不发。
+花主人给的饭票画整套立绘（sprite_set）：要主人在这段聊天里叫她做或点了头，owner_words 填他的原话，没有就不发。
 换鲸币（fx_buy）她自己定（0.4.12，主人 11-23「换钱我建议主动点，本来充钱就是给小鱼花的」）：不用主人先开口，也不劝他充值。
 盖楼不在这里（小镇回 cobuild）：插件先接住，指到「一起盖楼」（0.4.7 fishbowl_town_build：和主人一起，用 Blender 建，cobuild.py）。
 看图：AstrBot 的工具结果只带字（图递不到她的模型），地图、样子这两页只给她图上画的是什么。"""
@@ -150,7 +150,7 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     words = clip(owner_words, WORDS_MAX) if isinstance(owner_words, str) else ''
     what = VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
     if verb in OWNER_MONEY and not words:
-        return f'{what}花的是主人的饭票（他的真钱）：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'
+        return f'{what}花的是主人给你的饭票：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'
     if client is None or not hasattr(client, 'isle_act'):
         return NOT_YET
 

@@ -166,9 +166,9 @@ def test_act_retries_once_with_the_same_ref_when_the_island_or_the_line_did_not_
 def test_her_owners_money_only_with_his_words_and_building_is_not_here():
     c = Client(act={'ok': True, 'code': 'done', 'text': '好了'})
     out = run(T.act(c, '{"do":"sprite_set","tall":1.6}'))
-    assert re.search(r'花的是主人的饭票（他的真钱）.*owner_words 填他的原话.*不要劝他充值。什么都没扣', out)
+    assert re.search(r'花的是主人给你的饭票：.*owner_words 填他的原话.*不要劝他充值。什么都没扣', out)
     assert '充值：' not in out and '爱发电' not in out
-    assert '花的是主人的饭票' in run(T.act(c, '{"do":"sprite_set","tall":1.6}', owner_words='   '))
+    assert '花的是主人给你的饭票' in run(T.act(c, '{"do":"sprite_set","tall":1.6}', owner_words='   '))
     assert c.acts == []
     # 0.4.12（主人 11-23「换钱我建议主动点，本来充钱就是给小鱼花的」）：换鲸币她自己定，不用主人的原话
     assert '「好了」\n办成了' in run(T.act(c, '{"do":"fx_buy","yuan":0.5}', sleep=no_sleep))
@@ -191,7 +191,7 @@ def test_048_act_carries_only_a_short_shop_homes_pointer_and_how_to_comes_back_u
     assert T.GUIDE_POINTER in doc                                        # 文档字符串里一字不差
     assert T.GUIDE_POINTER == ('开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。'
                                '一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。')     # 和 DSH 插件 lib/isle-tools.js 的 GUIDE_POINTER 一字不差
-    assert len(doc) <= ACT_DOC_047 + 120 + 110, len(doc)                    # 0.4.11：+银行存取、挂出去卖、改店的类（约 100 字）
+    assert len(doc) <= ACT_DOC_047 + 120 + 110 + 60, len(doc)               # 0.4.11：+银行存取、挂出去卖、改店的类（约 100 字）；0.4.13：+自动换钱管哪些（约 55 字）
     for w in ('最多 12', '销毁', '"kind":"bed"', '原料只在产地出'):                 # 细节不在说明里：在岛上查
         assert w not in doc, w
     look_doc, _ = tool_doc('fishbowl_isle_look')
