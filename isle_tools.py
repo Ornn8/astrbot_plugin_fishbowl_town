@@ -23,6 +23,26 @@ LOOK_TOPICS = ('我的', '地', '楼', '铺位', '店', '玩的', '订单', '缺
 # 小镇的 TOPICS 还有「住宿」：11-23 线上查它只回「按房间住宿、出租还没开」，等岛上开了再加
 OWNER_MONEY = ('sprite_set',)                   # 要他在聊天里叫她做或点了头的（画立绘）；换鲸币 0.4.12 起她自己定
 COBUILD = ('build', 'build_guide', 'confirm_build')
+# 0.4.13 私家车（小镇 11-25 feat/1125-private-cars，开关默认关）：车行登记车型 {"do":"build","what":"车型",…}、先上牌 {"do":"build","car":"车名","plate":true}
+# 也写 do=build，但不是盖楼、不带 lot，放过去交给岛上；别的 build 照旧指去「一起盖楼」。自己下牌是 {"do":"demolish","car":"车名"}。
+CAR_WHAT = ('车型', '车', 'car', 'vehicle', '造车')
+
+
+def is_car_build(w) -> bool:
+    return isinstance(w, dict) and w.get('do') == 'build' and (w.get('car') is not None or str(w.get('what') or '').strip().lower() in CAR_WHAT)
+
+
+def car_what(w) -> str:
+    """车的那几件给主人看、记日记的中文名（不是车就是 ''）。"""
+    if not isinstance(w, dict) or (w.get('car') is None and not is_car_build(w)):
+        return ''
+    if w.get('do') == 'demolish':
+        return '给车下牌'
+    if w.get('do') != 'build':
+        return ''
+    return '给车上牌' if w.get('car') is not None else '在车行登记车型'
+
+
 TOPIC_ZH = {'我的': '你自己的', '地': '挂着的地', '楼': '待承包的楼', '铺位': '空铺位', '店': '开着的店', '订单': '接力订单', '缺的': '最缺的',
             '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子', '田': '田', '镇民': '镇民', '玩的': '能玩的地方'}
 VERB_ZH = {
@@ -143,12 +163,12 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     if not w:
         return '写一件要做的事：world 填 {"do":"…", …}（和小镇回合里写的 world 一样）。不会写先用 fishbowl_isle_look 查「怎么做」。'
     verb = w['do']
-    if verb in COBUILD:
+    if verb in COBUILD and not is_car_build(w):
         return BUILD_HERE
     if verb == 'look':
         return '查看用 fishbowl_isle_look，不算做事。'
     words = clip(owner_words, WORDS_MAX) if isinstance(owner_words, str) else ''
-    what = VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
+    what = car_what(w) or VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
     if verb in OWNER_MONEY and not words:
         return f'{what}花的是主人给你的饭票：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'
     if client is None or not hasattr(client, 'isle_act'):
