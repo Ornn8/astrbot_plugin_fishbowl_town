@@ -51,7 +51,7 @@ def test_agency_prompt_is_island_first_and_short(monkeypatch):
     assert '去不去打牌、找谁串门' not in text and '小镇不替你安排' not in text
     ex = build_turn_prompt(agency(), wish='先去镜湖边走走', wish_own=True, role='execute')
     after = build_turn_prompt(agency(actions=('none',)), wish='先去镜湖边走走', wish_own=True, role='execute')
-    assert '老镇的报名、串门、码头也可以写进 plan.steps' in ex and 'plan.steps' not in after and '还没走到' in after
+    assert '老镇的报名、串门、码头也可以写进 plan.steps' in ex and 'plan.steps' not in after and '远的店照样写，小镇会带你走过去，到了照办' in after   # 0.4.13：坐车 auto-transit 以后不再说「还没走到」
     assert '{steps}' not in ex + after
     monkeypatch.setattr(O, 'CLOSE_AT', 0)                                         # 11-28 以后：老镇的事一句不提
     closed_ex = build_turn_prompt(agency(), wish='先去镜湖边走走', wish_own=True, role='execute')
