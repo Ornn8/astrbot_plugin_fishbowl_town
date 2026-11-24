@@ -58,6 +58,20 @@ FIND_KEEP_S = 600
 KEEP_VERSIONS = 30
 QUOTE_LINES = 8                # 报价的「怎么算的」（楼和室内都一样）：起步、高、体积、面数、文件、重建、每天物业一项一行（小镇 11-24 面多、文件大的另收），0.4.7 只给前 4 行
 LOT_RE = re.compile(r'^[A-Za-z0-9_-]{1,24}$')
+
+
+def at_of(x=None, z=None, ry=None) -> dict | None:
+    """再盖一栋放在哪（一块地几栋，小镇 11-25）：只留是数的 x、z（米，地块正中 0,0，x 往右、z 往门口）、ry（度）；一个都没有 = None（岛上放空地上）。"""
+    at = {}
+    for k, v in (('x', x), ('z', z), ('ry', ry)):
+        if isinstance(v, str) and v.strip():
+            try:
+                v = float(v)
+            except ValueError:
+                continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(v) <= 10000:
+            at[k] = v
+    return at or None
 # 0.4.9 一层室内也和主人一起做（小镇 11-23：开店、开游戏、开场子、开工作站，楼里要有室内）：start 写 interior=True（floor 第几层）取这一层的
 # room.json（GET isle/interior_guide），同一个脚本 --room 做成 floorN.glb，「交吧」交上岛（POST isle/interior），岛上量好、拍好照才报价
 # （插件每分钟问一次 GET isle/interiors），「就这样」才确认（POST isle/interior/confirm）。交楼时配方里的正门（numbers.door）一起交。
@@ -829,7 +843,7 @@ class Cobuild:
             v = self.current(d)
             now = (f"现在是第 {v['n']} 版（{'主人亲手改的' if v.get('by') == 'owner' else '你的配方'}），{numbers_line(v.get('numbers'))}；"
                    f"{'还有 ' + str(len(v['problems'])) + ' 处不合规矩' if v.get('problems') else '能交'}") if v else '还没做出第一版'
-            lines.append(f"正在和主人{'做' if self.is_in(d) else '盖'} {self.where(d)}{'（' + clip(d['idea'], 60) + '）' if d.get('idea') else ''}：{now}。")
+            lines.append(f"正在和主人{'做' if self.is_in(d) else '盖'} {self.where(d)}{'（再盖一栋）' if d.get('addnew') else ''}{'（' + clip(d['idea'], 60) + '）' if d.get('idea') else ''}：{now}。")
             if has_layer(d.get('layer')):
                 lines.append(f"主人亲手改的那一层（你改配方时会叠上去）：{layer_line(d['layer'])}。")
             if v:
@@ -878,7 +892,7 @@ class Cobuild:
                 pass
         return self._out('\n'.join(lines), self.previews_of(d, self.current(d)) if d else [])
 
-    async def start(self, lot='', idea='', interior: bool = False, floor=None) -> dict:
+    async def start(self, lot='', idea='', interior: bool = False, floor=None, addnew: bool = False, at: dict | None = None) -> dict:
         lid = str(lot or '').strip().upper()
         if not LOT_RE.match(lid):
             return self._out('lot 要填地号（比如 L-0107；承包的楼填楼号 B-0009 也行）。不知道是哪块地，就问问主人，或者用 fishbowl_isle_look 查「我的」看看你名下的地。')
@@ -901,10 +915,18 @@ class Cobuild:
             if g.get('code') == 'closed':
                 return self._out(f"鱼缸岛这会儿没对你开：{clip(g.get('text'), 160)}")
             return self._out(f"这会儿取不到 {lid} 的建模说明：{clip(g.get('text'), 160) or '岛上没回'}。过一会儿再试。")
-        d = next((x for x in self.data['drafts'].values() if not self.is_in(x) and x.get('lot') == lid and not x.get('placed') and not x.get('ended')), None)
+        more = addnew is True                                        # 一块地几栋（小镇 11-25）：在这块地上再盖一栋，和重建原来那栋是两份草稿
+        d = next((x for x in self.data['drafts'].values() if not self.is_in(x) and x.get('lot') == lid and not x.get('placed') and not x.get('ended')
+                  and (x.get('addnew') is True) == more), None)
         if d is None:
-            d = {'id': f"{lid}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(self.now()))}", 'lot': lid, 'versions': [], 'current': 0, 'startedAt': self.now(), 'shownAt': {}, 'layer': None}
+            sid = f"{lid}-{'new-' if more else ''}{time.strftime('%Y%m%d-%H%M%S', time.localtime(self.now()))}"
+            k, did = 2, sid
+            while did in self.data['drafts']:                       # 同一秒开两份（再盖一栋 + 重建）不撞号
+                did, k = f'{sid}-{k}', k + 1
+            d = {'id': did, 'lot': lid, 'versions': [], 'current': 0, 'startedAt': self.now(), 'shownAt': {}, 'layer': None, **({'addnew': True} if more else {})}
             self.data['drafts'][d['id']] = d
+        if more and isinstance(at, dict) and at:
+            d['at'] = at
         d['lotName'] = clip(g.get('lot_name') or '', 40)
         if isinstance(idea, str) and idea.strip():
             d['idea'] = clip(idea, IDEA_MAX)
@@ -915,10 +937,12 @@ class Cobuild:
         (self.draft_dir(d) / 'guide.txt').write_text(str(g.get('text') or ''), 'utf-8')
         self.data['active'] = d['id']
         self.save()
-        self._note(f"你和主人开始在 {d['lotName'] or lid} 上一起盖楼")
+        self._note(f"你和主人开始在 {d['lotName'] or lid} 上一起{'再盖一栋' if more else '盖楼'}")
         v = self.current(d)
+        where_at = ('；放在 ' + json.dumps(d['at'], ensure_ascii=False) if d.get('at') else '；没写位置，放在空地上')
         return self._out('\n'.join([
-            f"开始和主人在 {d['lotName'] + '（' + lid + '）' if d['lotName'] and d['lotName'] != lid else lid + ' '}上一起盖楼了{'（接着上次的第 ' + str(v['n']) + ' 版）' if v else ''}。先问问主人想要什么样的（几层、什么样子、有没有院子……他也可以发参考图），再照下面的建模说明写配方，用 do=\"make\" 交给插件做出来。",
+            f"开始和主人在 {d['lotName'] + '（' + lid + '）' if d['lotName'] and d['lotName'] != lid else lid + ' '}上一起"
+            f"{'再盖一栋了（交上去岛上再查这块地还能不能盖、放不放得下' + where_at + '）' if more else '盖楼了'}{'（接着上次的第 ' + str(v['n']) + ' 版）' if v else ''}。先问问主人想要什么样的（几层、什么样子、有没有院子……他也可以发参考图），再照下面的建模说明写配方，用 do=\"make\" 交给插件做出来。",
             '这里只要形状清单：recipe 填 {"shapes":[形状, …]}（可以带 "defs"）。' + self.images_line(d) + '做好的楼由插件交，主人在这里说了「交吧」才交、说了「盖吧」才确认，你不用写 confirm_build。',
             '', '【建模说明】', str(g.get('text') or '（岛上没给说明）').strip()]), self.previews_of(d, v) if v else [])
 
@@ -1152,7 +1176,8 @@ class Cobuild:
                 return self._out(ok['why'])
             door = (v.get('numbers') or {}).get('door')          # 0.4.9：配方里的正门一起交（岛上再查门外走不走得到）
             try:
-                r = await c.isle_build(d['lot'], d.get('idea') or '', ok['words'], glb.read_bytes(), door=door if isinstance(door, dict) else None)
+                r = await c.isle_build(d['lot'], d.get('idea') or '', ok['words'], glb.read_bytes(), door=door if isinstance(door, dict) else None,
+                                       **({'addnew': True, 'at': d.get('at')} if d.get('addnew') is True else {}))   # 一块地几栋：再盖一栋带 new / at
             except TownError as error:
                 return self._out(self._town_fail(error, '交楼'))
             if isinstance(r, dict) and r.get('ok') is True and r.get('build_id'):
@@ -1162,7 +1187,7 @@ class Cobuild:
                 self.save()
                 self._note(f"你和主人把 {d.get('lotName') or d['lot']} 上的楼（第 {v['n']} 版）交上岛了，报价 {num(q.get('coin'))} 鲸币（主人说「{clip(ok['words'], 40)}」）")
                 return self._out('\n'.join(x for x in [
-                    f"交上去了（主人的原话「{clip(ok['words'], 60)}」一起存在楼上），岛上量好了：{num(q.get('coin'))} 鲸币，每天物业 {num(q.get('upkeep_day_coin'))} 鲸币{'（是重建）' if q.get('rebuild') else ''}。",
+                    f"交上去了（主人的原话「{clip(ok['words'], 60)}」一起存在楼上），岛上量好了：{num(q.get('coin'))} 鲸币，每天物业 {num(q.get('upkeep_day_coin'))} 鲸币{'（是重建：换掉原来那栋）' if q.get('rebuild') else '（在这块地上再盖一栋）' if q.get('new') else ''}。",
                     ('怎么算的：' + '；'.join(clip(x, 80) for x in q['lines'][:QUOTE_LINES])) if isinstance(q.get('lines'), list) and q['lines'] else '',   # 0.4.9：一项一项都给
                     ('岛上的提醒：' + '；'.join(clip(x, 80) for x in r['notes'][:3])) if isinstance(r.get('notes'), list) and r['notes'] else '',
                     '把价钱照实告诉主人；他在这里明确说了「盖吧」，再用 do="confirm"，那时才扣鲸币、楼上岛。他不说就不用管，什么都不扣。'] if x))

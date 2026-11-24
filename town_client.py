@@ -257,7 +257,7 @@ class TownClient:
         """这块地的建模说明 + 上限 + 给 recipe_to_blend.py 的 lot.json。→ {ok, lot, lot_name, text, limits, types, materials, lot_json}。"""
         return await self.request('GET', 'isle/build_guide', query={'lot': lot}, timeout=15)
 
-    async def isle_build(self, lot: str, idea: str, owner_words: str, glb: bytes, door: dict | None = None):
+    async def isle_build(self, lot: str, idea: str, owner_words: str, glb: bytes, door: dict | None = None, addnew: bool = False, at: dict | None = None):
         """交主人点头的 glb（multipart：lot、idea、owner_words、file；0.4.9 起带配方里的正门 door），岛上当场报价。→ {ok, build_id, quote{coin, upkeep_day_coin, lines…}, …}。"""
         form = [('lot', str(lot), None, None), ('idea', str(idea or ''), None, None), ('owner_words', str(owner_words or ''), None, None)]
         if isinstance(door, dict) and isinstance(door.get('side'), str):
@@ -266,6 +266,10 @@ class TownClient:
             except (TypeError, ValueError):
                 at = 0.0
             form.append(('door', json.dumps({'side': door['side'], 'at': at}, ensure_ascii=False), None, None))
+        if addnew:                                                   # 一块地几栋（小镇 11-25）：new = 在这块地上再盖一栋（不写是重建原来那栋）
+            form.append(('new', 'true', None, None))
+            if isinstance(at, dict) and at:                          # at = 放在哪 {x, z 米（地块正中 0,0），ry 度}；不写岛上放空地上
+                form.append(('at', json.dumps(at, ensure_ascii=False), None, None))
         form.append(('file', bytes(glb), 'house.glb', 'model/gltf-binary'))
         return await self.request('POST', 'isle/build', form=form, timeout=120)
 

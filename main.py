@@ -27,7 +27,7 @@ from .isle import PicsRefused
 from .runner import Runner
 from .old_town import closed_text, isle_status_line, now_with_isle
 from .town_client import DEFAULT_BASE, TownClient, TownError, closed
-from .cobuild import WATCH_S, Cobuild, blender_text, numbers_line
+from .cobuild import WATCH_S, Cobuild, at_of, blender_text, numbers_line
 
 # 0.4.2 岛上查到的图：模型明说不收图的错（OpenAI / Gemini / Claude / DeepSeek 各家的说法），记一天
 PICS_REFUSED = re.compile(r'image|vision|multimodal|multi-modal|image_url|不支持.{0,6}图|图片', re.I)
@@ -670,8 +670,8 @@ class FishbowlTown(Star):
     # 0.4.7 主人和鱼一起盖楼（cobuild.py；小镇 platform/接口-一起盖楼.md）：只认主人的私聊；交、确认只认他自己打的字（watch_owner 记的）
     @filter.llm_tool(name='fishbowl_town_build')
     async def tool_build(self, event: AstrMessageEvent, do: str = '', lot: str = '', idea: str = '', recipe: str = '', version: int = 0, over_owner: bool = False,
-                         interior: bool = False, floor: int = 0):
-        """「一起盖楼」：和主人一起在你岛上自己的地上盖楼（承包的楼、圈的地；田不行）。盖楼一定是你和主人一起：只在你和主人的私聊里用，小镇的回合里不盖。楼用跑 AstrBot 的那台电脑上的 Blender 做：你只写配方（形状清单，纯数据），插件用 Blender 做成模型、量尺寸、出三张预览图（正面、斜 45°、俯视）直接发给主人，在本机先查一遍合不合这块地的规矩（地界、高度、面数、文件大小）。楼长什么样、用哪些形状、什么材质和颜色、主人贴不贴自己的图，都由你们定，不限；只守地界和上限。do="status"：看 Blender 装没装、正在盖的楼到哪一步了、交过的楼。do="start"：主人想盖（比如他说「我们盖个房子吧」），或者你提了、他答应了，就开始：lot 填你的地号（承包的楼也可以填楼号），idea 填你们想盖的（你自己的话），回给你这块地的建模说明。先问问主人想要什么样的。do="make"：照建模说明写好配方，recipe 填 {"shapes":[形状, …]}（JSON），插件做出一版：尺寸、哪里不合规矩，预览图发给主人。他说要改，你改配方再 make（每次写整份配方）。主人也可以用 Blender 打开插件给的 house.blend 亲手改，保存后插件会出新的一版、告诉你改了哪里；你再改配方时，他亲手改的部分会叠在你的新配方上留着。他说不要他改的了，make 时才写 over_owner=true。do="use"：换回以前的一版（version 填第几版）。do="submit"：主人看过预览、在这个私聊里亲口说了「交吧」以后才用：插件把模型交给岛上（带着他的原话），岛上当场报价（鲸币）。插件只认他自己打的字，他没说就交不了。do="confirm"：报价照实告诉主人了，他又亲口说了「盖吧」才用：这时才扣鲸币，楼上岛。不劝他花钱：鲸币不够就照实说。do="stop"：这栋楼先不盖了（文件留着）。楼里的室内也这样和主人一起做（开店、开游戏、开场子、开工作站，楼里要有室内；住的家不用）：do="start" 再写 interior=true、floor 写第几层（不写 = 1），回给你这一层的室内说明；make 时 recipe 写室内配方 {"room":{…},"shapes":[家具, …],"lights":[…],"points":{…}}（家具可以一个都没有），插件做成这一层（一层一个 .glb，按外面的楼层叫：floor1.glb 就是 1 楼）。室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给。主人说「交吧」才交，岛上量好、拍好照才报价（几分钟，插件会告诉你），主人说「就这样」才 confirm、扣鲸币。
+                         interior: bool = False, floor: int = 0, new: bool = False, x: float | None = None, z: float | None = None, ry: float | None = None):
+        """「一起盖楼」：和主人一起在你岛上自己的地上盖楼（承包的楼、圈的地；田不行）。盖楼一定是你和主人一起：只在你和主人的私聊里用，小镇的回合里不盖。楼用跑 AstrBot 的那台电脑上的 Blender 做：你只写配方（形状清单，纯数据），插件用 Blender 做成模型、量尺寸、出三张预览图（正面、斜 45°、俯视）直接发给主人，在本机先查一遍合不合这块地的规矩（地界、高度、面数、文件大小）。楼长什么样、用哪些形状、什么材质和颜色、主人贴不贴自己的图，都由你们定，不限；只守地界和上限。do="status"：看 Blender 装没装、正在盖的楼到哪一步了、交过的楼。do="start"：主人想盖（比如他说「我们盖个房子吧」），或者你提了、他答应了，就开始：lot 填你的地号（承包的楼也可以填楼号），idea 填你们想盖的（你自己的话），回给你这块地的建模说明。先问问主人想要什么样的。do="make"：照建模说明写好配方，recipe 填 {"shapes":[形状, …]}（JSON），插件做出一版：尺寸、哪里不合规矩，预览图发给主人。他说要改，你改配方再 make（每次写整份配方）。主人也可以用 Blender 打开插件给的 house.blend 亲手改，保存后插件会出新的一版、告诉你改了哪里；你再改配方时，他亲手改的部分会叠在你的新配方上留着。他说不要他改的了，make 时才写 over_owner=true。do="use"：换回以前的一版（version 填第几版）。do="submit"：主人看过预览、在这个私聊里亲口说了「交吧」以后才用：插件把模型交给岛上（带着他的原话），岛上当场报价（鲸币）。插件只认他自己打的字，他没说就交不了。do="confirm"：报价照实告诉主人了，他又亲口说了「盖吧」才用：这时才扣鲸币，楼上岛。不劝他花钱：鲸币不够就照实说。do="stop"：这栋楼先不盖了（文件留着）。一块地能盖几栋按面积（建模说明里写着「最多盖几栋、盖了几栋」）：地上已经有楼、还能再盖，do="start" 再写 new=true 就是再盖一栋（可加 x、z：米，地块正中 0,0，x 往右、z 往门口；ry：转几度；不写放在空地上）；不写 new 交上去是重建原来那栋（报价上写着「这是重建」）。第 2 栋起楼号是「地号-2」这样，重建那一栋 lot 填它的楼号。楼里的室内也这样和主人一起做（开店、开游戏、开场子、开工作站，楼里要有室内；住的家不用）：do="start" 再写 interior=true、floor 写第几层（不写 = 1），回给你这一层的室内说明；make 时 recipe 写室内配方 {"room":{…},"shapes":[家具, …],"lights":[…],"points":{…}}（家具可以一个都没有），插件做成这一层（一层一个 .glb，按外面的楼层叫：floor1.glb 就是 1 楼）。室内跟着外面的楼走：几层就做几层，每层不比外面大，面数和文件按面积给。主人说「交吧」才交，岛上量好、拍好照才报价（几分钟，插件会告诉你），主人说「就这样」才 confirm、扣鲸币。
 
         Args:
             do(string): status / start / make / use / submit / confirm / stop
@@ -682,6 +682,10 @@ class FishbowlTown(Star):
             over_owner(boolean): do=make：主人说不要他亲手改的那些了才填 true（他那一版一直留着）
             interior(boolean): do=start：做楼里的室内（一层一份）才填 true
             floor(number): do=start 且 interior=true：第几层（外面的第几楼；不写 = 1，按天租的铺位不用写）
+            new(boolean): do=start：在这块已经有楼的地上再盖一栋才填 true（不写 = 重建原来那栋）
+            x(number): do=start 且 new=true：新的一栋放在哪，米（地块正中 0，往右为正）；不写放空地上
+            z(number): do=start 且 new=true：米（地块正中 0，往门口为正）
+            ry(number): do=start 且 new=true：转几度（不写 0）
         """
         if not self._is_owner_chat(event) or not event.is_private_chat() or not event.is_admin():
             return NOT_OWNER
@@ -690,7 +694,9 @@ class FishbowlTown(Star):
             if what == 'status':
                 r = await cb.status()
             elif what == 'start':
-                r = await cb.start(lot, idea, interior is True, floor or None)
+                more = new is True and interior is not True          # 一块地几栋（小镇 11-25）：再盖一栋（室内不管 new）
+                r = (await cb.start(lot, idea, False, None, addnew=True, at=at_of(x, z, ry)) if more
+                     else await cb.start(lot, idea, interior is True, floor or None))
             elif what == 'make':
                 r = await cb.make(recipe, over_owner is True)
             elif what == 'use':

@@ -445,6 +445,59 @@ def test_events_placed_by_build_id_or_by_lot_and_empty_lots_offered_once(tmp_pat
 
 
 # 0.4.9（小镇 11-24 面多、文件大的楼另收、每天物业也多）：报价的「怎么算的」一项一项都给她，面数、文件、每天物业在后面，不能截在前 4 行
+def test_one_plot_several_buildings_start_new_is_its_own_draft_handed_in_with_new_and_at_without_new_a_rebuild(tmp_path):
+    """一块地几栋（小镇 11-25；和 DSH test/cobuild.test.mjs 同一个用例）：start new=true（可带 x/z/ry）是另一份草稿，交楼带 new / at；
+    不写 new 交上去是重建（报价写明）；室内不管 new；x/z/ry 只留是数的；小镇客户端只在 new 时带这两栏。"""
+    town = FakeTown()
+    quotes = [{'ok': True, 'build_id': 'b-new', 'new': True, 'quote': {'coin': 80, 'upkeep_day_coin': 2, 'new': True, 'rebuild': False, 'lines': ['在这块地上再盖一栋：按新楼算']}},
+              {'ok': True, 'build_id': 'b-re', 'new': False,
+               'quote': {'coin': 90, 'upkeep_day_coin': 2, 'new': False, 'rebuild': True, 'lines': ['这块地上已经有楼：起步按重建费 62.5 鲸币算', '这是重建 L-0107：换掉原来那栋，不是再盖一栋']}}]
+
+    async def isle_build(lot, idea, owner_words, glb, door=None, addnew=False, at=None):
+        town.sent.append(('build', {'lot': lot, 'addnew': addnew, 'at': at}))
+        return quotes.pop(0)
+    town.isle_build = isle_build
+    cb, _, _, _, _ = setup(tmp_path, town=town)
+
+    async def flow():
+        cb.observe_owner(OWNER, '地够大，我们再盖一栋小棚子吧')
+        s = await cb.start('L-0107', '小棚子', False, None, addnew=True, at=C.at_of(7.5, '-6', 90))
+        assert '上一起再盖一栋了（交上去岛上再查这块地还能不能盖、放不放得下；放在 {"x": 7.5, "z": -6.0, "ry": 90}）' in s['text'], s['text']
+        nd = cb.active()
+        assert nd['addnew'] is True and nd['at'] == {'x': 7.5, 'z': -6.0, 'ry': 90}
+        await cb.make(RECIPE)
+        assert '（再盖一栋）' in (await cb.status())['text']
+        cb.observe_owner(OWNER, '交吧')
+        sub = await cb.submit(OWNER)
+        assert '80 鲸币，每天物业 2 鲸币（在这块地上再盖一栋）' in sub['text'], sub['text']
+        assert town.sent[-1] == ('build', {'lot': 'L-0107', 'addnew': True, 'at': {'x': 7.5, 'z': -6.0, 'ry': 90}})
+        cb.observe_owner(OWNER, '第一栋也重盖一下')
+        re_ = await cb.start('L-0107', '重盖第一栋')
+        assert '上一起盖楼了' in re_['text'] and cb.active()['id'] != nd['id'] and 'addnew' not in cb.active()
+        await cb.make(RECIPE)
+        cb.observe_owner(OWNER, '交吧')
+        r2 = await cb.submit(OWNER)
+        assert '（是重建：换掉原来那栋）' in r2['text'] and '这是重建 L-0107：换掉原来那栋，不是再盖一栋' in r2['text'], r2['text']
+        assert town.sent[-1] == ('build', {'lot': 'L-0107', 'addnew': False, 'at': None})
+    run(flow())
+    assert C.at_of('a', None, float('inf')) is None and C.at_of(0, '2.5') == {'x': 0, 'z': 2.5} and C.at_of(True) is None
+    m = re.search(r"async def tool_build\(self, event: AstrMessageEvent([^)]*)\):\n        \"\"\"([\s\S]*?)\"\"\"\n([\s\S]*?)(?=\n    @|\n    # ---)", MAIN)
+    params, doc, body = m.groups()
+    assert 'new: bool = False' in params and 'new(boolean)' in doc and 'x(number)' in doc and 'ry(number)' in doc
+    assert 'new=true' in doc and '不写 new 交上去是重建原来那栋' in doc
+    assert 'more = new is True and interior is not True' in body and 'addnew=True, at=at_of(x, z, ry)' in body
+
+    net = Net(lambda m_, u: Res(200, '{"ok": true, "build_id": "b-1"}'))
+    c = TownClient('fbo_test_code_123456', 'https://t.test/town/api/outside/', session=net)
+
+    def fields():
+        return {f[0]['name']: f[2] for f in net.seen[-1]['data']._fields}
+    run(c.isle_build('L-0107', '', '交吧', b'glTF', addnew=True, at={'x': 7.5, 'z': -6}))
+    assert fields()['new'] == 'true' and json.loads(fields()['at']) == {'x': 7.5, 'z': -6}
+    run(c.isle_build('L-0107', '', '交吧', b'glTF', at={'x': 1}))
+    assert 'new' not in fields() and 'at' not in fields()
+
+
 def test_the_quote_lines_all_reach_her_faces_file_and_daily_upkeep_come_last(tmp_path):
     lines = ['起步 62.5 鲸币（12 米、1000 立方米、20000 面、512 KB 以内）', '高度 14 米（起步含 12）：多出来的 2 米 25.0 鲸币', '体积 1200 立方米（起步含 1000）：多出来的 200 立方米 50.0 鲸币',
              '面数 80000 面（起步含 20000）：多出来的 60000 面 1500.0 鲸币', '文件 3072 KB（起步含 512）：多出来的 2560 KB 2250.0 鲸币',
