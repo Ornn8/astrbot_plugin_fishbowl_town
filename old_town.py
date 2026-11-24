@@ -13,6 +13,9 @@ import time
 CLOSE_AT = 1795795200            # 2026-11-28 00:00 北京时间：老镇整个关掉
 # 老镇的动作（小镇在拿主意的回合里列出来的；老镇停了小镇就不列了）
 OLD_ACTIONS = {'signup', 'cancel', 'visit', 'join', 'leave', 'pier', 'arcade', 'make', 'court', 'challenge', 'propose', 'club_join', 'club_leave'}
+# 0.4.13 老镇安静（小镇 old_quiet）时回合里还会有：cancel / leave / club_leave（退出照常），visit（约好的照走：小手机约见到点、
+# 今天到期的约定、第一次约会）。这几样不算「老镇还在给她选」，只有开新的那几样才算（小镇的开关拨回去，就又列出来了）。
+OLD_NEW = OLD_ACTIONS - {'cancel', 'leave', 'club_leave', 'visit'}
 ISLE_HOME = '你住在鱼缸岛上。岛上去哪都得走过去（多远、几分钟，小镇会写给你），到了才能做那儿的事；约了地方就早点动身。'
 CLOSED = '老镇（鱼缸小镇）关了，这一块去不了了。'
 CLOSED_HER = CLOSED + '你住在鱼缸岛上：岛上想去哪、做什么，用「去小镇」写下你的打算就行。'
@@ -34,9 +37,9 @@ def on_isle(turn) -> bool:
 
 
 def old_town_offered(turn, now: float | None = None) -> bool:
-    """老镇还开着，而且小镇这一回合还列着老镇的动作（0.4.13：没列动作就是没有）。"""
+    """老镇还开着，而且小镇这一回合还列着老镇开新的动作（0.4.13：没列动作就是没有；只列退出、约好的串门不算）。"""
     acts = _packet(turn).get('actions')
-    return old_town_open(now) and isinstance(acts, list) and any(a in OLD_ACTIONS for a in acts)
+    return old_town_open(now) and isinstance(acts, list) and any(a in OLD_NEW for a in acts)
 
 
 def isle_lines(turn) -> list:

@@ -37,6 +37,10 @@ def test_isle_line_follows_the_turn_and_the_old_town_is_never_named():
     assert O.old_town_offered(agency(), AFTER) is False                           # 11-28 以后小镇列着也不讲
     assert O.old_town_offered(agency(actions=()), BEFORE) is False                # 没列动作就是没有
     assert O.old_town_offered(agency(actions=('none',)), BEFORE) is False
+    # 老镇安静（小镇 old_quiet）：线上回合只剩 none / cancel / leave，有约要守时多一个 visit——都不算老镇还在给她选
+    assert O.old_town_offered(agency(actions=('none', 'cancel', 'leave')), BEFORE) is False
+    assert O.old_town_offered(agency(actions=('none', 'cancel', 'leave', 'visit', 'club_leave')), BEFORE) is False
+    assert O.old_town_offered(agency(actions=('none', 'cancel', 'join')), BEFORE) is True       # 开关拨回去：又列出开新的
 
 
 def test_agency_prompt_is_island_first_and_short(monkeypatch):
