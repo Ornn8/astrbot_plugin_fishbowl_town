@@ -107,17 +107,23 @@ def wait_answer(minutes: float, note: str) -> str:
 
 
 def served_of(a: dict) -> str:
-    """0.4.13 客人上门、门后的比赛：她在 world 里回了，给聊天里的她看的那句写她做了什么（以前写「先不动」，真 DSH 守店 11-24）。"""
+    """0.4.13 客人上门、门后的比赛：她在 world 里回了，给聊天里的她看的那句写她做了什么（以前写「先不动」，真 DSH 守店 11-24）。
+    action 写 none 或 world 都认；她说的话在 op:say 里，也可能写在 world.result.say / result.text 里（线上店主 11-24 的 3 单）。"""
     w = a.get('world') if isinstance(a, dict) and isinstance(a.get('world'), dict) else None
-    if not w or str(a.get('action') or 'none') != 'none':
+    if not w or str(a.get('action') or 'none') not in ('none', 'world'):
         return ''
     if w.get('do') == 'door_step':
         return '在门后的比赛里走了一步'
     if w.get('do') != 'reply':
         return ''
+
+    def words(t) -> str:
+        return t.strip() if isinstance(t, str) and t.strip() and t.strip() != '…' else ''
+
     acts = w.get('actions') if isinstance(w.get('actions'), list) else []
-    said = next((x['text'].strip() for x in acts if isinstance(x, dict) and x.get('op') == 'say' and isinstance(x.get('text'), str)
-                 and x['text'].strip() and x['text'].strip() != '…'), '')
+    res = w.get('result') if isinstance(w.get('result'), dict) else {}
+    said = (next((s for s in (words(x.get('text')) for x in acts if isinstance(x, dict) and x.get('op') == 'say') if s), '')
+            or words(res.get('say')) or words(res.get('text')))
     return f'接待了客人（说「{said[:30]}」）' if said else '接待了客人'
 
 

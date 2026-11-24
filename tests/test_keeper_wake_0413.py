@@ -58,3 +58,19 @@ def test_after_the_rules_role_served_a_guest_her_chat_self_reads_that_she_served
     assert decided_line('rules', {'action': 'none', 'world': {'do': 'door_step', 'run': 'r1', 'choice': 'a'}}) == head + '在门后的比赛里走了一步'
     assert decided_line('rules', {'action': 'none', 'world': {'do': 'reply', 'event': 2, 'actions': [{'op': 'say', 'text': '…'}]}}) == head + '接待了客人'
     assert decided_line('rules', {'action': 'none', 'world': {'do': 'go', 'place': '码头'}}) == head + '先不动', 'other world steps: as before'
+
+
+def test_a_keeper_who_wrote_action_world_and_put_her_words_in_result_say_still_reads_that_she_served_him():
+    """线上店主 11-24 的 3 单：action 写 world，话写在 world.result.say / result.text 里。"""
+    head = '有件事要马上回，小镇那边按你定的规矩先答了：'
+    sell = {'action': 'world', 'world': {'do': 'reply', 'event': 499, 'actions': [{'kind': 'sell', 'good': 'candle', 'n': 1, 'price': 6}],
+                                          'result': {'say': '一支香薰蜡烛，六鲸币…'}}}
+    assert decided_line('rules', sell) == head + '接待了客人（说「一支香薰蜡烛，六鲸币…」）'
+    serve = {'action': 'world', 'world': {'do': 'reply', 'event': 7, 'actions': [{'do': 'serve', 'good': '蛋炒饭', 'n': 1}], 'result': {'text': '蛋炒饭好啦'}}}
+    assert decided_line('rules', serve) == head + '接待了客人（说「蛋炒饭好啦」）', 'result.text too'
+    both = {'action': 'world', 'world': {'do': 'reply', 'event': 8, 'actions': [{'op': 'say', 'text': '麦冬，面来了'}], 'result': {'say': '别的话'}}}
+    assert decided_line('rules', both) == head + '接待了客人（说「麦冬，面来了」）', 'op:say wins over result'
+    assert decided_line('rules', {'action': 'world', 'world': {'do': 'reply', 'event': 9, 'actions': [], 'result': {'say': '…'}}}) == head + '接待了客人'
+    assert decided_line('rules', {'action': 'world', 'world': {'do': 'door_step', 'run': 'r1', 'choice': 'a'}}) == head + '在门后的比赛里走了一步'
+    visit = {'action': 'visit', 'target': '小柒', 'world': {'do': 'reply', 'event': 9, 'result': {'say': '来了'}}}
+    assert decided_line('rules', visit) == head + '去找小柒串门', 'a real action keeps its own words'
