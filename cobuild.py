@@ -46,6 +46,27 @@ SCRIPT_SHA256 = 'a4cad6c8e460cac43b3f8a4a9ea3ff1ed750c1aeef1355e423f533c9b9f7168
 IMAGES_DIR = 'images'          # 草稿里放她自己的图（主人传的、她生成的）的文件夹：配方的 image 按文件名从这里找（--images）
 MIN_BLENDER = (4, 2)
 BLENDER_URL = 'https://www.blender.org/download/'
+# 0.4.13 进房间（室内表达力会话 11-24，小镇 feat/1125-room-links）：室内放好了，小镇给一条进屋看的链接（只带地块号）。
+# 先用小镇给的 link（只认岛上屋子的那种）；老小镇、事件里没带就照地号自己拼；只在真放好了（不是照片在检查）时给。和 DSH 0.9.17 同一套。
+ROOM_URL = 'https://island.fishbowltown.com/?in='
+ROOM_LINK_RE = re.compile(r'^https://island\.fishbowltown\.com/\?in=[A-Za-z0-9-]{1,24}$')
+ROOM_FRESH_S = 24 * 3600          # 放好以后多久，主人私聊的背景备注里带着链接
+ROOM_RECENT_S = 3 * 24 * 3600     # 放好以后多久，do=status 里还列着
+CHECK_POLL_S = 2 * 24 * 3600      # 确认了、照片还在检查的，最多接着问多久
+
+
+def room_link(d, r=None) -> str:
+    link = r.get('link') if isinstance(r, dict) else None
+    if isinstance(link, str) and ROOM_LINK_RE.match(link.strip()):
+        return link.strip()
+    lot = str((d or {}).get('lot') or '')
+    return ROOM_URL + lot if re.fullmatch(r'L-\d{1,6}', lot) else ''
+
+
+def see_line(link: str) -> str:
+    return f'进去看：{link}（发给主人，点开就进到屋里）' if link else ''
+
+
 NEED_BLENDER = '盖楼要先装 Blender（4.2 或更新）'
 RUN_S = 120                    # 一次 Blender 最多跑这么久（和岛上建造工人一样 120 秒）
 OWNER_WORDS_MAX = 200
@@ -859,11 +880,16 @@ class Cobuild:
                 q = s.get('quote') or {}
                 lines.append(f"交上去的第 {s['n']} 版报价 {num(q.get('coin'))} 鲸币、每天物业 {num(q.get('upkeep_day_coin'))} 鲸币，等主人点头（do=\"confirm\"）。")
             if d.get('placed'):
-                lines.append(f"这一层的室内已经确认了（付了 {num(d['placed'].get('paid_coin'))} 鲸币）。" if self.is_in(d) else f"这栋楼已经盖好了（付了 {num(d['placed'].get('paid_coin'))} 鲸币）。")
+                lines.append(f"这一层的室内已经确认了（付了 {num(d['placed'].get('paid_coin'))} 鲸币）。"
+                             + ('' if d['placed'].get('checking') else see_line(d['placed'].get('link') or room_link(d))) if self.is_in(d) else f"这栋楼已经盖好了（付了 {num(d['placed'].get('paid_coin'))} 鲸币）。")
             if d.get('refused') and not s:
                 lines.append('上次交的室内岛上没收：' + ('；'.join(clip(x, 80) for x in _list(d['refused'].get('problems'))[:3]) or '没说原因') + '。')
         else:
             lines.append('现在没有在盖的楼。主人想盖，就用 do="start"、lot 填地号开始；做楼里的室内，do="start" 再写 interior=true（floor 第几层）。')
+        for x in self._checking_rooms():                  # 确认了、照片在检查的：当场问一次过没过
+            await self.poll_inside(x, True)
+        for x in [y for y in self._placed_rooms(ROOM_RECENT_S) if y is not d][:2]:
+            lines.append(f"{self.where(x)}放好了。{see_line(x['placed'].get('link') or room_link(x))}")
         seen = [lot for lot in self.data['lotsSeen'] if not any(x.get('lot') == lot and x.get('placed') for x in self.data['drafts'].values())]
         if seen:
             lines.append(f"你最近在岛上看到还没盖楼的地：{'、'.join(seen[:5])}。")
@@ -1230,7 +1256,8 @@ class Cobuild:
     async def poll_inside(self, d, force: bool = False):
         """交上去的室内到哪一步了（GET isle/interiors，最多每分钟一次；force 当场问）：-> {quoted} | {refused, problems} | {placed} | None。"""
         s = (d or {}).get('submitted')
-        if not self.is_in(d) or not s or not s.get('iid') or d.get('placed'):
+        waiting = bool(d and d.get('placed') and d['placed'].get('checking'))   # 0.4.13：确认了、照片还在检查的那份，接着问到放上岛
+        if not self.is_in(d) or not s or not s.get('iid') or (d.get('placed') and not waiting):
             return None
         if not force and self.now() - float(s.get('polledAt') or 0) < POLL_S:
             return None
@@ -1248,15 +1275,28 @@ class Cobuild:
             self.save()
             return None
         st = x.get('state')
-        if st in ('quoted', 'checking', 'placed'):
+        if waiting:
+            if st == 'placed':
+                d['placed'].update({'checking': False, 'link': room_link(d, x), 'placedAt': self.now()})
+                self.save()
+                self._note(f"{self.where(d)}过了检查，放上岛了。{see_line(d['placed']['link'])}")
+                return {'placed': True}
+            if st not in ('refused', 'void'):          # 还在检查
+                self.save()
+                return None
+            d['placed'] = None                          # 没过照片检查：跟没收一样（岛上退回检查费以外的鲸币），草稿留着，改好再交
+            self._note(f"{self.where(d)}没过照片检查，没上岛：{'；'.join(clip(p, 80) for p in _list(x.get('problems'))[:3]) or '没说原因'}")
+        if not d.get('placed') and st in ('quoted', 'checking', 'placed'):
             fresh = not s.get('quote')
             s['quote'] = {'coin': x.get('coin'), 'upkeep_day_coin': x.get('upkeep_day_coin'), 'lines': list(x.get('lines') or [])[:QUOTE_LINES], 'area_m2': x.get('area_m2'), 'rooms': x.get('rooms')}
             if st != 'quoted':                                 # 主人在账户页确认了
-                d['placed'] = {'at': self.now(), 'paid_coin': x.get('coin'), 'upkeep_day_coin': x.get('upkeep_day_coin'), 'by': 'owner_page', 'checking': st == 'checking'}
+                checking = st == 'checking'
+                d['placed'] = {'at': self.now(), 'paid_coin': x.get('coin'), 'upkeep_day_coin': x.get('upkeep_day_coin'), 'by': 'owner_page', 'checking': checking,
+                               **({} if checking else {'link': room_link(d, x), 'placedAt': self.now()})}
                 if self.data.get('active') == d['id']:
                     self.data['active'] = None
                 self.save()
-                self._note(f'{self.where(d)}确认了（主人在账户页点了确认）')
+                self._note(f'{self.where(d)}确认了（主人在账户页点了确认）' + ('' if checking else '。' + see_line(d['placed']['link'])))
                 return {'placed': True}
             self.save()
             return {'quoted': True} if fresh else None
@@ -1292,14 +1332,15 @@ class Cobuild:
             return self._out(self._town_fail(error, '确认'))
         if isinstance(r, dict) and r.get('ok') is True:
             checking = r.get('code') == 'checking'
-            d['placed'] = {'at': self.now(), 'paid_coin': r.get('paid_coin'), 'owner_words': ok['words'], 'checking': checking}
+            d['placed'] = {'at': self.now(), 'paid_coin': r.get('paid_coin'), 'owner_words': ok['words'], 'checking': checking,
+                           **({} if checking else {'link': room_link(d, r), 'placedAt': self.now()})}
             d['requests'] = [*(d.get('requests') or []), {'what': 'confirm', 'at': self.now(), 'iid': s['iid'], 'owner_words': ok['words']}][-20:]
             if self.data.get('active') == d['id']:
                 self.data['active'] = None
             self.save()
-            self._note(f"你和主人一起做的 {self.where(d)}确认了：付了 {num(r.get('paid_coin'))} 鲸币")
+            self._note(f"你和主人一起做的 {self.where(d)}确认了：付了 {num(r.get('paid_coin'))} 鲸币" + ('' if checking else '。' + see_line(d['placed']['link'])))
             return self._out(f"确认了：付了 {num(r.get('paid_coin'))} 鲸币。这一层的照片在过看图检查，过了就上岛（没过退回检查费以外的鲸币）；上岛以后因为没有室内停业的店自己开门。" if checking
-                             else f"这一层的室内放好了：付了 {num(r.get('paid_coin'))} 鲸币。上岛以后因为没有室内停业的店自己开门。")
+                             else f"这一层的室内放好了：付了 {num(r.get('paid_coin'))} 鲸币。上岛以后因为没有室内停业的店自己开门。{see_line(d['placed']['link'])}")
         if isinstance(r, dict) and r.get('code') == 'none':
             d['submitted'] = None
             self.save()
@@ -1389,6 +1430,8 @@ class Cobuild:
     # ---- 插件自己看着的 ----
     async def tick(self):
         """有正在盖的楼时每隔几秒看一眼：主人改了就出新的一版，把预览图发给主人、告诉她（main.py 的 tell）。"""
+        for x in self._checking_rooms():   # 0.4.13：确认了、照片在检查的（已经不是正在做的那份），过了就记下、带上链接（poll_inside 每分钟最多一次）
+            await self.poll_inside(x)
         d = self.active()
         if self.is_in(d) and d.get('submitted') and not d['submitted'].get('quote') and not d.get('placed'):   # 0.4.9：交上去的室内，量好了就告诉她
             p = await self.poll_inside(d)
@@ -1440,8 +1483,28 @@ class Cobuild:
         out, self.notes = self.notes, []
         return out
 
+    def _placed_rooms(self, span: float) -> list:
+        """放好了（不是照片在检查）的室内，最近放好的在前。"""
+        def at(x):
+            return float(x['placed'].get('placedAt') or x['placed'].get('at') or 0)
+        got = [x for x in self.data['drafts'].values() if self.is_in(x) and x.get('placed') and not x['placed'].get('checking') and self.now() - at(x) < span]
+        return sorted(got, key=at, reverse=True)
+
+    def _checking_rooms(self) -> list:
+        """确认了、照片还在检查的室内（两天以内的）。"""
+        return [x for x in self.data['drafts'].values() if self.is_in(x) and x.get('placed') and x['placed'].get('checking') and x.get('submitted')
+                and self.now() - float(x['placed'].get('at') or 0) < CHECK_POLL_S]
+
     def context_line(self) -> str:
-        """主人私聊的背景备注里一行：正在盖的楼到哪一步；没在盖时，有还没盖楼的地提一次（每块地只提一次，不催）。"""
+        """主人私聊的背景备注里一行：刚放好的室内给链接（0.4.13）；正在盖的楼到哪一步；没在盖时，有还没盖楼的地提一次（每块地只提一次，不催）。"""
+        room = next(((x, x['placed'].get('link') or room_link(x)) for x in self._placed_rooms(ROOM_FRESH_S) if x['placed'].get('link') or room_link(x)), None)
+        fresh = f'你和主人做的 {self.where(room[0])}放好了，主人想看就把这个链接发给他：{room[1]}' if room else ''
+        busy = self._busy_line()
+        if fresh:
+            return f'{fresh}；{busy}' if busy else fresh
+        return busy or self._offer_line()
+
+    def _busy_line(self) -> str:
         d = self.active()
         if d and not d.get('placed') and self.is_in(d):
             v = self.current(d)
@@ -1459,6 +1522,9 @@ class Cobuild:
                 return f"你和主人在一起盖 {d.get('lotName') or d['lot']} 上的楼：报价 {num((s.get('quote') or {}).get('coin'))} 鲸币，等主人点头（他说「盖吧」再用「一起盖楼」do=confirm）"
             st = (f"第 {v['n']} 版{'（主人亲手改的）' if v.get('by') == 'owner' else ''}{'还有不合规矩的地方' if v.get('problems') else '能交'}") if v else '还没做出第一版'
             return f"你和主人在一起盖 {d.get('lotName') or d['lot']} 上的楼：{st}（「一起盖楼」fishbowl_town_build 接着做）"
+        return ''
+
+    def _offer_line(self) -> str:
         lot = next((lt for lt in self.data['lotsSeen'] if not self.data['offered'].get(lt) and not any(x.get('lot') == lt for x in self.data['drafts'].values())), None)
         if lot:
             self.data['offered'][lot] = self.now()
@@ -1491,17 +1557,28 @@ class Cobuild:
         e = item['data']
         if e.get('what') not in ('placed', 'inside_placed', 'inside_checking'):
             return
-        open_ = [x for x in self.data['drafts'].values() if x.get('submitted') and not x.get('placed')]
         bid = e.get('build_id') if isinstance(e.get('build_id'), str) else e.get('iid') if isinstance(e.get('iid'), str) else ''   # 室内带 iid
-        d = next((x for x in open_ if (x['submitted'].get('build_id') == bid if bid else not self.is_in(x) and x.get('lot') == str(e.get('lot') or ''))), None)
+
+        def same(x):
+            return bool(x.get('submitted')) and bid in (x['submitted'].get('build_id'), x['submitted'].get('iid'))
+        if e.get('what') == 'inside_placed' and bid:   # 0.4.13：确认了、照片在检查的那份过了，放上岛了
+            w = next((x for x in self.data['drafts'].values() if self.is_in(x) and x.get('placed') and x['placed'].get('checking') and same(x)), None)
+            if w:
+                w['placed'].update({'checking': False, 'link': room_link(w, e), 'placedAt': self.now()})
+                self.save()
+                self._note(f"{self.where(w)}过了检查，放上岛了。{see_line(w['placed']['link'])}")
+                return
+        open_ = [x for x in self.data['drafts'].values() if x.get('submitted') and not x.get('placed')]
+        d = next((x for x in open_ if (same(x) if bid else not self.is_in(x) and x.get('lot') == str(e.get('lot') or ''))), None)
         if not d:
             return
+        room = room_link(d, e) if self.is_in(d) and e.get('what') == 'inside_placed' else ''
         d['placed'] = {'at': self.now(), 'paid_coin': e.get('coin', e.get('paid_coin')), 'upkeep_day_coin': e.get('upkeep_day_coin'), 'by': e.get('by') or '',
-                       'checking': e.get('what') == 'inside_checking'}
+                       'checking': e.get('what') == 'inside_checking', **({'link': room, 'placedAt': self.now()} if room else {})}
         if self.data.get('active') == d['id']:
             self.data['active'] = None
         self.save()
-        self._note(f"你和主人一起做的 {self.where(d)}确认了{'（主人在账户页点了确认）' if e.get('by') == 'owner_page' else ''}" if self.is_in(d)
+        self._note(f"你和主人一起做的 {self.where(d)}确认了{'（主人在账户页点了确认）' if e.get('by') == 'owner_page' else ''}{'。' + see_line(room) if room else ''}" if self.is_in(d)
                    else f"你和主人一起盖的楼在 {d.get('lotName') or d['lot']} 上盖好了{'（主人在账户页点了确认）' if e.get('by') == 'owner_page' else ''}")
 
     def observe_owner(self, key, text, at: float | None = None):
