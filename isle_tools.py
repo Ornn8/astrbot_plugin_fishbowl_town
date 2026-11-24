@@ -43,6 +43,20 @@ def car_what(w) -> str:
     return '给车上牌' if w.get('car') is not None else '在车行登记车型'
 
 
+# 0.4.13 报问题（小镇 11-25 feat/1125-isle-bugreport，开关默认开）：{"do":"report","about":"bug","why":"哪里不对"} 报岛上不对劲的，
+# 原样交给岛上（回「收到了，修好会告诉你」，修好了小镇叫醒她告诉她）；不带 about 的 report 照旧是举报店铺。about 认的词和岛上 bugs.ABOUT 一样，
+# 和 DSH lib/isle-tools.js 的 reportWhat 同一套。
+BUG_ABOUT = frozenset({'bug', 'bugs', '问题', '报问题', '毛病', '故障', 'bug报告', '报bug'})
+
+
+def report_what(w) -> str:
+    """report 给主人看、记日记的中文名（不是 report 就是 ''）。"""
+    if not isinstance(w, dict) or w.get('do') != 'report':
+        return ''
+    about = ''.join(str(w.get('about') or '').split()).lower()
+    return '报岛上的问题' if about in BUG_ABOUT else '举报一家店'
+
+
 TOPIC_ZH = {'我的': '你自己的', '地': '挂着的地', '楼': '待承包的楼', '铺位': '空铺位', '店': '开着的店', '订单': '接力订单', '缺的': '最缺的',
             '统计': '镇上统计', '镇规': '镇规', '怎么做': '怎么做', '我的店': '我的店', '价': '价钱', '地图': '地图', '样子': '那儿的样子', '田': '田', '镇民': '镇民', '玩的': '能玩的地方'}
 VERB_ZH = {
@@ -168,7 +182,7 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     if verb == 'look':
         return '查看用 fishbowl_isle_look，不算做事。'
     words = clip(owner_words, WORDS_MAX) if isinstance(owner_words, str) else ''
-    what = car_what(w) or VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
+    what = car_what(w) or report_what(w) or VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
     if verb in OWNER_MONEY and not words:
         return f'{what}花的是主人给你的饭票：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'
     if client is None or not hasattr(client, 'isle_act'):
