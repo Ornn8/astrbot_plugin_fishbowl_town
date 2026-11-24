@@ -176,11 +176,11 @@ def golden_posted(tmp) -> dict:
     return out
 
 
-GOLDEN_PROMPTS = {  # 0.4.9（3d5561c）：golden_prompts()；0.4.13 rules 的 14 个重算过（急事那句加了客人上门、门后的比赛，照小镇给的那句写进 world）
-    'plain/-/open': '2cb37a00b461836a', 'plain/execute/open': '0e4b434935cded95', 'plain/rules/open': 'efbc88923ecb2f1f',
-    'plain/wake/open': '72a65aef188cc0ff', 'plain/pull/open': '89cf6e2dc6ee9f1a', 'plain/fallback/open': '2d90ca7a0bdaadab',
-    'plain_old_actions/-/open': '932e1fc61e8d3ee5', 'plain_old_actions/execute/open': 'dd380e3339ee13e2', 'plain_old_actions/rules/open': 'e183fc7b5f5627a0',
-    'plain_old_actions/wake/open': 'ca2f62ab98eaa8fb', 'plain_old_actions/pull/open': '80f0aa2fc8b40c07', 'plain_old_actions/fallback/open': 'c1b79cb3324f9420',
+GOLDEN_PROMPTS = {  # 0.4.9（3d5561c）：golden_prompts()；0.4.13 rules 的 14 个重算过（急事那句加了客人上门、门后的比赛，照小镇给的那句写进 world）；0.4.13 老镇停用又重算 18 个（plain 和 plain_old_actions：去掉「老镇这周还能去」那句，小镇没列动作就只有 none）
+    'plain/-/open': '98091a2289e42323', 'plain/execute/open': '89e22fc3b497753c', 'plain/rules/open': 'e2afc1e23ef0e33e',
+    'plain/wake/open': '4be0aa3d0cdb7f6b', 'plain/pull/open': '022e89a42e7fa6b4', 'plain/fallback/open': '1160aa4388682180',
+    'plain_old_actions/-/open': 'd50d568af6a7b2da', 'plain_old_actions/execute/open': 'b40b54e52b469dba', 'plain_old_actions/rules/open': 'f1e22f3906878334',
+    'plain_old_actions/wake/open': 'df711e7ada0e7d8b', 'plain_old_actions/pull/open': 'e242a58d3eb54acd', 'plain_old_actions/fallback/open': '41f65b6cffc6aa99',
     'plain_isle_actions/-/open': '98091a2289e42323', 'plain_isle_actions/execute/open': '89e22fc3b497753c', 'plain_isle_actions/rules/open': 'e2afc1e23ef0e33e',
     'plain_isle_actions/wake/open': '4be0aa3d0cdb7f6b', 'plain_isle_actions/pull/open': '022e89a42e7fa6b4', 'plain_isle_actions/fallback/open': '1160aa4388682180',
     'isle_no_ask/-/open': '77f379f2e85b6684', 'isle_no_ask/execute/open': '6e437abba00b14de', 'isle_no_ask/rules/open': '8b33792ce72f3fa8',
@@ -197,8 +197,8 @@ GOLDEN_PROMPTS = {  # 0.4.9（3d5561c）：golden_prompts()；0.4.13 rules 的 1
     'game/wake/open': '64560287386c8d1a', 'game/pull/open': '64560287386c8d1a', 'game/fallback/open': '64560287386c8d1a',
     'activity/-/open': 'ef10bc5d7ca8bf9d', 'activity/execute/open': 'ef10bc5d7ca8bf9d', 'activity/rules/open': 'ef10bc5d7ca8bf9d',
     'activity/wake/open': 'ef10bc5d7ca8bf9d', 'activity/pull/open': 'ef10bc5d7ca8bf9d', 'activity/fallback/open': 'ef10bc5d7ca8bf9d',
-    'plain/-/closed': '3958a7e5f532b0d6', 'plain/execute/closed': '4c5e339a8dba9663', 'plain/rules/closed': '1c9bd8402960a0b3',
-    'plain/wake/closed': 'ea1270a9783751d7', 'plain/pull/closed': '3d2ac64ae563d852', 'plain/fallback/closed': '246f889d7748cfd1',
+    'plain/-/closed': '98091a2289e42323', 'plain/execute/closed': '89e22fc3b497753c', 'plain/rules/closed': 'e2afc1e23ef0e33e',
+    'plain/wake/closed': '4be0aa3d0cdb7f6b', 'plain/pull/closed': '022e89a42e7fa6b4', 'plain/fallback/closed': '1160aa4388682180',
     'plain_old_actions/-/closed': 'd50d568af6a7b2da', 'plain_old_actions/execute/closed': '15a7d348b07e300c', 'plain_old_actions/rules/closed': 'f1e22f3906878334',
     'plain_old_actions/wake/closed': 'df711e7ada0e7d8b', 'plain_old_actions/pull/closed': 'e242a58d3eb54acd', 'plain_old_actions/fallback/closed': '41f65b6cffc6aa99',
     'plain_isle_actions/-/closed': '98091a2289e42323', 'plain_isle_actions/execute/closed': '89e22fc3b497753c', 'plain_isle_actions/rules/closed': 'e2afc1e23ef0e33e',

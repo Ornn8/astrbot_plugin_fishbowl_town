@@ -11,7 +11,6 @@ import time
 
 from .bridge import recap_lines
 from .journal import TOWN_WHO
-from .old_town import OLD_TOWN, old_town_open
 
 TTL = 300
 RETURN_GAP = 3 * 3600
@@ -65,8 +64,6 @@ def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=(), at
         lines.append(f'- {_str(a, 80)}')
     if not lines:
         return ''
-    if old_town_open(at):            # 0.4.3：老镇这周还开着，11-28 关门（关了以后这一行自己不见）
-        lines.append(f'- {OLD_TOWN}')
     return '\n'.join([HEAD + TOWN_WHO, *lines, CLOSE, FLOOR])
 
 

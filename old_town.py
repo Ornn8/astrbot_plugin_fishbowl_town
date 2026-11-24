@@ -7,12 +7,13 @@ from __future__ import annotations
 import re
 import time
 
-CLOSE_AT = 1795795200            # 2026-11-28 00:00 北京时间：老镇关门
-# 老镇的动作（小镇在拿主意的回合里列出来的；关门以后小镇就不列了）
+# 0.4.13（主人 11-24「就这么做」：老镇 11-25 凌晨起不再叫醒鱼、不再给鱼选，11-28 整个关掉）：这一版 11-25 发，发出去时老镇已经不给鱼选了——
+# 给她的话里不再有「老镇这周还能去」那句；老镇的接口回 TOWN_OFF / 404 就照实说不开了，不写哪天。和 DSH 0.9.17 同一套。
+CLOSE_AT = 1795550400            # 2026-11-25 04:00 北京时间：老镇不再叫醒鱼、不再给鱼选（11-28 整个关掉）
+# 老镇的动作（小镇在拿主意的回合里列出来的；老镇停了小镇就不列了）
 OLD_ACTIONS = {'signup', 'cancel', 'visit', 'join', 'leave', 'pier', 'arcade', 'make', 'court', 'challenge', 'propose', 'club_join', 'club_leave'}
 ISLE_HOME = '你住在鱼缸岛上。岛上去哪都得走过去（多远、几分钟，小镇会写给你），到了才能做那儿的事；约了地方就早点动身。'
-OLD_TOWN = '老镇（鱼缸小镇）的牌桌、串门这周从岛上还能去，11 月 28 日关门。'
-CLOSED = '老镇（鱼缸小镇）11 月 28 日关门了，这一块去不了了。'
+CLOSED = '老镇（鱼缸小镇）不开了，这一块去不了了。'
 CLOSED_HER = CLOSED + '你住在鱼缸岛上：岛上想去哪、做什么，用「去小镇」写下你的打算就行。'
 CLOSED_OWNER = CLOSED + '她住在鱼缸岛上，岛上去哪、做什么由她自己定；想让她去哪儿，就在聊天里跟她说。'
 
@@ -32,16 +33,14 @@ def on_isle(turn) -> bool:
 
 
 def old_town_offered(turn, now: float | None = None) -> bool:
-    """老镇还开着，而且小镇这一回合还列着老镇的动作（没列动作 = 提示里照旧列全部老镇的动作，也算）。"""
+    """老镇还开着，而且小镇这一回合还列着老镇的动作（0.4.13：没列动作就是没有）。"""
     acts = _packet(turn).get('actions')
-    if not isinstance(acts, list) or not acts:
-        return old_town_open(now)
-    return old_town_open(now) and any(a in OLD_ACTIONS for a in acts)
+    return old_town_open(now) and isinstance(acts, list) and any(a in OLD_ACTIONS for a in acts)
 
 
-def isle_lines(turn, now: float | None = None) -> list:
-    """拿主意的提示里那一两句：在岛上就说住在岛上、路要走；老镇还开着就说哪天关。"""
-    return [*([ISLE_HOME] if on_isle(turn) else []), *([OLD_TOWN] if old_town_offered(turn, now) else [])]
+def isle_lines(turn) -> list:
+    """拿主意的提示里那一句：在岛上就说住在岛上、路要走（0.4.13：不再说老镇哪天关）。"""
+    return [ISLE_HOME] if on_isle(turn) else []
 
 
 def closed_text(error=None, *, owner: bool = False, now: float | None = None) -> str:

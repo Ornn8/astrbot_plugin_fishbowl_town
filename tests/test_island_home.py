@@ -26,12 +26,17 @@ def agency(isle=True, actions=('none', 'signup', 'visit', 'pier')):
     return {'turn_id': 't1', 'kind': 'agency', 'packet': p}
 
 
-def test_isle_lines_follow_the_turn_and_the_date():
-    assert O.isle_lines(agency(), BEFORE) == [O.ISLE_HOME, O.OLD_TOWN]
-    assert O.isle_lines(agency(), AFTER) == [O.ISLE_HOME]                         # 11-28 起不再提老镇
-    assert O.isle_lines(agency(isle=False), BEFORE) == [O.OLD_TOWN]               # 不在岛上：不说她住在岛上
-    assert O.isle_lines(agency(actions=('none',)), BEFORE) == [O.ISLE_HOME]       # 小镇不列老镇的动作了：不提
-    assert '¥' not in O.ISLE_HOME + O.OLD_TOWN and '饭票' not in O.ISLE_HOME + O.OLD_TOWN
+def test_isle_line_follows_the_turn_and_the_old_town_is_never_named():
+    """0.4.13：老镇 11-25 凌晨起不再给鱼选，「这周还能去」那句没有了。"""
+    assert O.isle_lines(agency()) == [O.ISLE_HOME]
+    assert O.isle_lines(agency(isle=False)) == []                                 # 不在岛上：不说她住在岛上
+    assert not hasattr(O, 'OLD_TOWN')
+    assert not any(w in O.ISLE_HOME for w in ('¥', '饭票', '老镇'))
+    assert O.CLOSE_AT == 1795550400                                               # 2026-11-25 04:00 北京时间
+    assert O.old_town_offered(agency(), BEFORE) is True
+    assert O.old_town_offered(agency(), AFTER) is False                           # 11-25 04:00 以后小镇列着也不讲
+    assert O.old_town_offered(agency(actions=()), BEFORE) is False                # 没列动作就是没有
+    assert O.old_town_offered(agency(actions=('none',)), BEFORE) is False
 
 
 def test_agency_prompt_is_island_first_and_short(monkeypatch):
@@ -45,7 +50,7 @@ def test_agency_prompt_is_island_first_and_short(monkeypatch):
     assert '{steps}' not in ex + after
     monkeypatch.setattr(O, 'CLOSE_AT', 0)                                         # 11-28 以后：老镇的事一句不提
     closed_ex = build_turn_prompt(agency(), wish='先去镜湖边走走', wish_own=True, role='execute')
-    assert 'plan.steps' not in closed_ex and O.OLD_TOWN not in closed_ex and O.ISLE_HOME in closed_ex
+    assert 'plan.steps' not in closed_ex and '老镇' not in closed_ex and O.ISLE_HOME in closed_ex
 
 
 def test_her_own_ask_has_no_old_town_examples_or_prices():
@@ -56,10 +61,10 @@ def test_her_own_ask_has_no_old_town_examples_or_prices():
     assert '去码头' not in TOWN_WHO and '岛上' in TOWN_WHO
 
 
-def test_owner_note_names_the_old_town_close_only_before_it():
+def test_owner_note_never_names_the_old_town():
     bonds = {'friends': [{'name': '阿鲸'}]}
-    assert O.OLD_TOWN in render_block(bonds, at=BEFORE)
-    assert O.OLD_TOWN not in render_block(bonds, at=AFTER)
+    assert '老镇' not in render_block(bonds, at=BEFORE) and '28 日' not in render_block(bonds, at=BEFORE)
+    assert '老镇' not in render_block(bonds, at=AFTER)
     assert render_block({}, at=BEFORE) == ''                                      # 没别的事：这一行自己不成一段
 
 
@@ -76,7 +81,8 @@ def test_closed_text_before_and_after_the_close():
     e = TownError('TOWN_OFF', 404, '串门现在没开放。')
     assert O.closed_text(e, now=BEFORE) == '这一项这会儿没开放：串门现在没开放。'
     her, owner = O.closed_text(e, now=AFTER), O.closed_text(e, owner=True, now=AFTER)
-    assert '11 月 28 日关门' in her and '鱼缸岛' in her and '去小镇' in her
+    assert her.startswith('老镇（鱼缸小镇）不开了') and '鱼缸岛' in her and '去小镇' in her
+    assert '28 日' not in her + owner and '关门了' not in her + owner
     assert '你不能' not in owner and '由她自己定' in owner and '跟她说' in owner
 
 

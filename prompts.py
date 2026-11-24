@@ -264,14 +264,14 @@ AGENCY_FREE = '去哪、做什么都照你自己的性子和此刻的心情来�
 
 def _agency_prompt(turn, system, user, how, as_, left, recent, wish, wish_own, floors, rules, life=(), role: str = '') -> str:
     p = turn.get('packet') or {}
-    actions = p.get('actions') if isinstance(p.get('actions'), list) and p.get('actions') else list(ACTION_ZH)
+    actions = p.get('actions') if isinstance(p.get('actions'), list) and p.get('actions') else ['none']   # 0.4.13：小镇没列就只有 none（不再回落成全部老镇的动作）
     ask = isle_ask_of(turn)   # 0.4.10：岛上的计划回合 / 短唤醒：plan 照小镇的写（stops），插件不加自己 hours / doing 那一行
     head = (ISLE_ROLE_HEAD.get(role) if ask else None) or ROLE_HEAD.get(role)
     return '\n'.join([
         f"{head[0] if head else '【鱼缸小镇 · 该你自己拿主意了】'}{'你在小镇叫' + as_ if as_ else ''}{left}",
         *([head[1].replace('{steps}', OLD_STEPS if old_town_offered(turn) else '')] if head else []),
         AGENCY_FREE,
-        *isle_lines(turn),   # 0.4.3：住在鱼缸岛上、路要走；老镇还开着就说哪天关
+        *isle_lines(turn),   # 0.4.3：住在鱼缸岛上、路要走（0.4.13 不再说老镇哪天关）
         f"你能做的：{'、'.join(f'{a}（{ACTION_ZH.get(a, a)}）' for a in actions)}。小镇列出来的邀请只是建议，不想去就不去。",
         *(['串门（visit）的 "target" 写对方的 fish_id（「可以去串门」名单里有）；名单里没有的鱼，直接写她的名字。'] if 'visit' in actions else []),
         ISLE_ASK_LINE[ask] if ask else
