@@ -60,7 +60,7 @@ def room_link(d, r=None) -> str:
     if isinstance(link, str) and ROOM_LINK_RE.match(link.strip()):
         return link.strip()
     lot = str((d or {}).get('lot') or '')
-    return ROOM_URL + lot if re.fullmatch(r'L-\d{1,6}', lot) else ''
+    return ROOM_URL + lot if re.fullmatch(r'L-\d{1,6}(?:-\d{1,3})?', lot) else ''   # 一块地第 2 栋起楼号 L-0425-2（11-25）
 
 
 def see_line(link: str) -> str:

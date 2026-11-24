@@ -48,6 +48,9 @@ def test_room_link_and_see_line():
     assert C.room_link({'lot': 'L-0107'}) == 'https://island.fishbowltown.com/?in=L-0107'                  # 老小镇没给：照地号拼
     assert C.room_link({'lot': 'L-0107'}, {'link': 'https://evil.example/?in=L-1'}) == 'https://island.fishbowltown.com/?in=L-0107'
     assert C.room_link({'lot': 'B-0009'}) == '' and C.room_link({'lot': 'gift:abc'}) == ''                     # 楼号、送的家不拼
+    assert C.room_link({'lot': 'L-0152-2'}) == 'https://island.fishbowltown.com/?in=L-0152-2'               # 一块地第 2 栋起（11-25）
+    assert C.room_link({'lot': 'L-0152-2-3'}) == ''
+    assert C.room_link({'lot': 'L-0152'}, {'link': 'https://island.fishbowltown.com/?in=L-0152-2'}) == 'https://island.fishbowltown.com/?in=L-0152-2'
     assert C.see_line('') == '' and C.see_line(LINK) == f'进去看：{LINK}（发给主人，点开就进到屋里）'
 
 
