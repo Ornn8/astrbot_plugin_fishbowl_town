@@ -34,12 +34,19 @@ def test_only_our_own_addresses_and_a_complete_record():
 
 
 class FakeRes:
-    def __init__(self, status, data):
+    """aiohttp 的样子：read(n) 是「最多 n」，只回缓冲里那一块（0.4.13 以前就是被它坑了）；iter_chunked 一块一块给到头。"""
+    def __init__(self, status, data, chunk=4096, length='same', headers=None):
         self.status, self._data = status, data
+        self.content_length = len(data) if length == 'same' else length
+        self.headers = headers or {}
 
         class C:
             async def read(_, n):
-                return data[:n]
+                return data[:min(n, chunk)]
+
+            async def iter_chunked(_, n):
+                for j in range(0, len(data), min(n, chunk)):
+                    yield data[j:j + min(n, chunk)]
         self.content = C()
 
     async def __aenter__(self):
@@ -50,11 +57,11 @@ class FakeRes:
 
 
 class FakeSession:
-    def __init__(self, status, data):
-        self.status, self.data = status, data
+    def __init__(self, status, data, **kw):
+        self.status, self.data, self.kw = status, data, kw
 
     def get(self, url, **kw):
-        return FakeRes(self.status, self.data)
+        return FakeRes(self.status, self.data, **self.kw)
 
 
 def test_a_zip_is_kept_only_when_its_sha256_matches(tmp_path):
@@ -99,3 +106,59 @@ def test_install_goes_through_astrbots_own_upload_install(tmp_path):
 def test_the_note_tells_him_how():
     t = U.told_text({'version': '0.3.3', 'notes': '修了一个问题'}, '0.3.2')
     assert '/town update' in t and '0.3.3' in t and '0.3.2' in t and '修了一个问题' in t
+
+
+def _info(data, version='0.4.13', url='https://fishbowltown.com/dsh/pkg/astrbot/x.zip'):
+    return {'version': version, 'url': url, 'sha256': hashlib.sha256(data).hexdigest()}
+
+
+def test_a_zip_sent_in_many_small_chunks_is_read_whole(tmp_path):
+    """0.4.13（用户报：/town update 每次 0.2 秒内「校验值对不上」）：服务器分很多小块发，也要读到头。"""
+    data = bytes(range(256)) * 1200                                              # 300 KB
+    path = asyncio.run(U.download(_info(data), tmp_path, FakeSession(200, data, chunk=1000)))
+    assert path.read_bytes() == data
+    # 少了一截（连接断在半路，Content-Length 对不上）：不装，说没下完
+    try:
+        asyncio.run(U.download(_info(data, '0.4.14'), tmp_path, FakeSession(200, data[:5000], chunk=1000, length=len(data))))
+    except RuntimeError as error:
+        assert '没下完' in str(error) and '5000 / 307200' in str(error), error
+    else:
+        raise AssertionError('should refuse')
+    assert not (tmp_path / 'update-0.4.14.zip').exists()
+    # 压缩着传的：长度是压缩后的，不比长度，照 sha256
+    path = asyncio.run(U.download(_info(data, '0.4.15'), tmp_path, FakeSession(200, data, chunk=1000, length=123, headers={'Content-Encoding': 'gzip'})))
+    assert path.read_bytes() == data
+
+
+def test_a_real_aiohttp_server_sending_small_flushed_chunks(tmp_path):
+    """真的 aiohttp 服务器，一次 1 KB 写、每块都让出去：以前的 read(ZIP_MAX + 1) 只拿到头一块。"""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    data = bytes(range(256)) * 1200
+
+    async def handler(request):
+        res = web.StreamResponse(headers={'Content-Type': 'application/zip', 'Content-Length': str(len(data))})
+        await res.prepare(request)
+        for j in range(0, len(data), 1024):
+            await res.write(data[j:j + 1024])
+            await asyncio.sleep(0.001)
+        await res.write_eof()
+        return res
+
+    async def run():
+        app = web.Application()
+        app.router.add_get('/x.zip', handler)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            return await U.download(_info(data, url=str(server.make_url('/x.zip'))), tmp_path)
+        finally:
+            await server.close()
+    path = asyncio.run(run())
+    assert path.read_bytes() == data
+
+
+def test_a_failed_update_tells_him_the_manual_way():
+    t = U.manual_text({'url': 'https://fishbowltown.com/dsh/pkg/astrbot/astrbot_plugin_fishbowl_town-0.4.13.zip'})
+    assert 'astrbot_plugin_fishbowl_town-0.4.13.zip' in t and 'AstrBot 插件页 → 上传 zip' in t and '设置保留' in t

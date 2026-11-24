@@ -164,7 +164,7 @@ class FishbowlTown(Star):
                 try:
                     await self.context.send_message(umo, MessageChain().message(
                         f"【鱼缸小镇插件】更新到 {info['version']} 没成：{error}。现在还是 {VERSION}，照常在小镇值班。"
-                        f"也可以手动更新：下载 {info['url']}，在 AstrBot 插件页上传安装（同名覆盖，设置保留）。"))
+                        + updater.manual_text(info)))
                 except Exception:  # noqa: BLE001
                     pass
 

@@ -59,6 +59,20 @@ async def fetch_latest(session: aiohttp.ClientSession | None = None, url: str = 
             await session.close()
 
 
+CHUNK = 64 * 1024
+
+
+async def _read_all(res) -> bytes:
+    """The whole body, chunk by chunk, stopping past ZIP_MAX. (0.4.13: ``res.content.read(n)`` is 「at most n」: it returned what was in
+    the buffer, the first chunk only, so the sha256 never matched and no self-update succeeded since 0.3.2.)"""
+    data = bytearray()
+    async for chunk in res.content.iter_chunked(CHUNK):
+        data += chunk
+        if len(data) > ZIP_MAX:
+            break
+    return bytes(data)
+
+
 async def download(info: dict, folder: Path, session: aiohttp.ClientSession | None = None) -> Path:
     """The zip into ``folder``, sha256 checked. Raises RuntimeError with a reason a person can read."""
     own = session is None
@@ -67,14 +81,20 @@ async def download(info: dict, folder: Path, session: aiohttp.ClientSession | No
         async with session.get(info['url'], timeout=aiohttp.ClientTimeout(total=120)) as res:
             if res.status != 200:
                 raise RuntimeError(f'下载新版失败（HTTP {res.status}）')
-            data = await res.content.read(ZIP_MAX + 1)
+            data = await _read_all(res)
+            want = res.content_length
+            plain = str((res.headers or {}).get('Content-Encoding') or 'identity').lower() == 'identity'
     except aiohttp.ClientError as error:
         raise RuntimeError(f'下载新版失败（{type(error).__name__}）') from error
+    except TimeoutError as error:
+        raise RuntimeError('下载新版超时了') from error
     finally:
         if own:
             await session.close()
     if len(data) > ZIP_MAX:
         raise RuntimeError('下载到的文件太大，不像插件包，没有装')
+    if want is not None and plain and len(data) != want:                   # (压缩传的：长度是压缩后的，不比)
+        raise RuntimeError(f'下载没下完（收到 {len(data)} / {want} 字节），没有装，过会儿再试')
     if hashlib.sha256(data).hexdigest() != info['sha256']:
         raise RuntimeError('下载到的文件和官网写的校验值对不上，没有装（可能被网络改过，过会儿再试）')
     folder.mkdir(parents=True, exist_ok=True)
@@ -89,6 +109,11 @@ async def install(context, zip_path: Path) -> None:
     if manager is None or not hasattr(manager, 'install_plugin_from_file'):
         raise RuntimeError('这个版本的 AstrBot 不让插件自己更新，请在 AstrBot 插件页上传新的 zip')
     await manager.install_plugin_from_file(str(zip_path))
+
+
+def manual_text(info: dict) -> str:
+    """自己更新没成时给主人的手动那条路（0.4.13）。"""
+    return (f"手动更新：下载 {info['url']}，打开 AstrBot 插件页 → 上传 zip（「从文件安装」，同名插件原地覆盖，设置保留）。")
 
 
 def told_text(info: dict, mine: str) -> str:
