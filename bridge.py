@@ -66,6 +66,15 @@ def life_from_history(history, *, updated_at: float = 0, now: float | None = Non
     return out[-n:]
 
 
+def scrub_text(text) -> str:
+    """一段话去掉网址、邮箱、@谁、4 位以上的数字串（scrub_life 每行用的同一套；0.4.14 起「小镇打算」、主人托的话也过一遍）。"""
+    body = str(text if text is not None else '')
+    body = re.sub(r'https?://\S+', '（链接）', body, flags=re.I)
+    body = re.sub(r'[\w.+-]+@[\w-]+\.[\w.-]+', '（邮箱）', body)
+    body = re.sub(r'[@＠][^\s，。！？、,.!?]{1,20}', '（某人）', body)
+    return re.sub(r'\d[\d\s-]{2,}\d', lambda x: '（一串数字）' if len(re.sub(r'\D', '', x.group(0))) >= DIGITS_RUN else x.group(0), body).strip()
+
+
 def scrub_life(lines, *, max_chars: int = LIFE_MAX) -> list:
     """进小镇之前：去掉网址、邮箱、@谁、4 位以上的数字串，再控制总长。行的样子不变（「主人：……」）。"""
     out, used = [], 0
@@ -73,11 +82,7 @@ def scrub_life(lines, *, max_chars: int = LIFE_MAX) -> list:
         s = str(raw if raw is not None else '')
         m = _HEAD.match(s)
         prefix = m.group(0) if m else ''
-        body = s[len(prefix):]
-        body = re.sub(r'https?://\S+', '（链接）', body, flags=re.I)
-        body = re.sub(r'[\w.+-]+@[\w-]+\.[\w.-]+', '（邮箱）', body)
-        body = re.sub(r'[@＠][^\s，。！？、,.!?]{1,20}', '（某人）', body)
-        body = re.sub(r'\d[\d\s-]{2,}\d', lambda x: '（一串数字）' if len(re.sub(r'\D', '', x.group(0))) >= DIGITS_RUN else x.group(0), body).strip()
+        body = scrub_text(s[len(prefix):])
         if not body:
             continue
         s = prefix + body

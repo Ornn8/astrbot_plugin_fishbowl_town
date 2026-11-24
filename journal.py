@@ -8,6 +8,7 @@ import re
 import time
 from pathlib import Path
 
+from .bridge import scrub_text
 from .isle import stops_of, stops_text
 from .prompts import GAME_ZH, HOLD_KINDS
 
@@ -272,7 +273,7 @@ class Journal:
 
     # --- 主人托的话 / 她自己说的打算 --------------------------------------------------------------------------------------
     def wish(self, text: str, own: bool = False):
-        t = short(text, 200)
+        t = short(scrub_text(text) or '主人想让你去小镇玩', 200)     # 0.4.14：这句话会带进小镇回合，存之前去掉网址、邮箱、@谁、数字串
         again = (self.s.get('wish') or {}).get('text') == t
         self.s['wish'] = {'text': t, 'ts': self.now(), **({'own': True} if own else {})}
         if again:

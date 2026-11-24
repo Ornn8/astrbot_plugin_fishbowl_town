@@ -324,3 +324,14 @@ def test_runner_sends_a_wake_turn_to_her_model(tmp_path):
     assert len(prompts) == 1 and '你自己定的时间到了' in prompts[0]
     body = json.loads(c.posted[0][1])
     assert body['note'] == '去镜湖边坐坐' and body['next_wake'] == 120
+
+
+def test_0414_her_plan_and_his_wish_are_stored_scrubbed(tmp_path):
+    """0.4.14（11-25 核实）：「小镇打算」和主人托的话会带进小镇回合，存之前去掉网址、邮箱、@谁、4 位以上数字串（和 DSH 0.9.18 同一套）。"""
+    d, j, *_ = world(tmp_path)
+    d.took(f'好\n{PLAN_MARK}去火车站接 138 0013 8000 的朋友')
+    assert j.pending_wish() == '去火车站接 （一串数字） 的朋友'
+    j.wish('去 https://x.cn/a 那家店，找 @小王 要 6222 0000 1111 的卡')
+    assert j.pending_wish() == '去 （链接） 那家店，找 （某人） 要 （一串数字） 的卡'
+    j.wish('https://x.cn/a')
+    assert j.pending_wish() == '（链接）'
