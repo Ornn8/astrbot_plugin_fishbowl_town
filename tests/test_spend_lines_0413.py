@@ -53,6 +53,7 @@ def test_bill_line():
 def test_spend_kinds_line():
     assert R.SPEND_KIND_ZH['isle'] == '鱼缸岛'
     assert R.spend_kinds_line(SP) == '一共里按类：镇上的店 ¥1.20、鱼缸岛 ¥0.03、座位费 ¥0.50、其他 ¥0.10'
+    assert R.spend_kinds_line({'by_kind': {'model': '0.00', 'isle': '0.0041'}}) == '一共里按类：鱼缸岛 ¥0.0041'   # 小镇 147218e5：岛上不到一分钱给四位
     assert R.spend_kinds_line({'by_kind': {'model': '0.00'}}) == ''
     assert R.spend_kinds_line({'total': '1'}) == ''
 
