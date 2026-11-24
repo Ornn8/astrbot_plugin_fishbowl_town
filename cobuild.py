@@ -42,7 +42,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT_FILE = HERE / 'cobuild_scripts' / 'recipe_to_blend.py'
 LAYER_FILE = HERE / 'cobuild_scripts' / 'owner_layer.py'
 # 小镇 tools/cobuild/recipe_to_blend.py（11-26 配方第 2 版：倒角、旋转体、扫掠、软垫、图案、自己的图、defs + use）的 sha256：插件原样带着，测试查一字不差
-SCRIPT_SHA256 = '7b865c12d1845c09752308684d886ebfd9b18b2262de29f6bf5d241253d688eb'
+SCRIPT_SHA256 = 'a4cad6c8e460cac43b3f8a4a9ea3ff1ed750c1aeef1355e423f533c9b9f71687'
 IMAGES_DIR = 'images'          # 草稿里放她自己的图（主人传的、她生成的）的文件夹：配方的 image 按文件名从这里找（--images）
 MIN_BLENDER = (4, 2)
 BLENDER_URL = 'https://www.blender.org/download/'

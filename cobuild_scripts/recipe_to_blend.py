@@ -1892,7 +1892,7 @@ class Ctx:
         src = im["src"]
         if src not in self.imgs:
             if not self.dir:
-                raise Fail("配方用了自己的图（%s），但这次没有图的目录：插件是草稿里的 images 文件夹（--images）；岛上托管的鱼用自己的图还没开，先用 pattern 图案" % src)
+                raise Fail("配方用了自己的图（%s），但这次没有给图的目录（--images）：插件做的是草稿里的 images 文件夹；岛上托管的鱼写建模回合里列的相册图名" % src)
             path = os.path.join(self.dir, src)
             if not image_name_ok(src) or not os.path.isfile(path) or os.path.dirname(os.path.realpath(path)) != os.path.realpath(self.dir):
                 raise Fail("图 %s 在图的目录里没有（文件名要一模一样，只认 png / jpg / webp）" % src)

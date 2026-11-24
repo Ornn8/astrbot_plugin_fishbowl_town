@@ -42,6 +42,7 @@ TOWN_WHO = ('小镇里的话和事就是你自己在小镇做的：插件另外�
 # 0.4.13：guest = 客人上门她的守店店、door = 门后的比赛轮到她（小镇 worldlink EVENT_WAKES）。客人押着钱等她，她说要歇着也叫醒
 #   （11-24 线上 20 家守店店约 430 件客人全作废：插件替她答了「先不动」）；主人定的勿扰时段照样算
 MUST_ANSWER = {'wish', 'heart', 'invited', 'promise_due', 'challenged', 'pulled', 'meet_ask', 'guest', 'door'}
+# 0.4.13：小镇 11-25 起（old_quiet 开着）不发这几种了，新增的 isle_look（按平常的时候看看岛上）要叫她。这一行留着：小镇的开关拨回去时空醒照样不叫模型
 IDLE_REASONS = {'idle', 'fcode', 'ad', 'venue'}
 # 0.4.5：小镇到了她自己定的时间（她的 next_wake）来叫她：reasons 里带 'wake'（可能只有它）。这是她自己的一次拿主意，一定叫她的模型，
 # 不当成「没什么可做的」、也不当成她还在歇着（歇到的就是这会儿）；主人定的勿扰时段照样算（和 DSH 插件 0.9.8 一样）

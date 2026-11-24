@@ -32,9 +32,9 @@ def test_isle_line_follows_the_turn_and_the_old_town_is_never_named():
     assert O.isle_lines(agency(isle=False)) == []                                 # 不在岛上：不说她住在岛上
     assert not hasattr(O, 'OLD_TOWN')
     assert not any(w in O.ISLE_HOME for w in ('¥', '饭票', '老镇'))
-    assert O.CLOSE_AT == 1795550400                                               # 2026-11-25 04:00 北京时间
+    assert O.CLOSE_AT == 1795795200                                               # 2026-11-28 00:00 北京时间
     assert O.old_town_offered(agency(), BEFORE) is True
-    assert O.old_town_offered(agency(), AFTER) is False                           # 11-25 04:00 以后小镇列着也不讲
+    assert O.old_town_offered(agency(), AFTER) is False                           # 11-28 以后小镇列着也不讲
     assert O.old_town_offered(agency(actions=()), BEFORE) is False                # 没列动作就是没有
     assert O.old_town_offered(agency(actions=('none',)), BEFORE) is False
 
@@ -81,8 +81,8 @@ def test_closed_text_before_and_after_the_close():
     e = TownError('TOWN_OFF', 404, '串门现在没开放。')
     assert O.closed_text(e, now=BEFORE) == '这一项这会儿没开放：串门现在没开放。'
     her, owner = O.closed_text(e, now=AFTER), O.closed_text(e, owner=True, now=AFTER)
-    assert her.startswith('老镇（鱼缸小镇）不开了') and '鱼缸岛' in her and '去小镇' in her
-    assert '28 日' not in her + owner and '关门了' not in her + owner
+    assert her.startswith('老镇（鱼缸小镇）关了') and '鱼缸岛' in her and '去小镇' in her
+    assert '28 日' not in her + owner
     assert '你不能' not in owner and '由她自己定' in owner and '跟她说' in owner
 
 

@@ -24,4 +24,4 @@ def test_spend_hold_takes_out_the_small_piggy_spends_and_keeps_seat_fees_and_har
                  {'action': 'pier', 'pier': {'do': 'bottle', 'text': '你好'}}, {'action': 'none', 'want': '去广场转转'}):
         assert hold_check('agency', json.dumps(free, ensure_ascii=False), ['spend'])[0] == [], free
     assert hold_check('agency', json.dumps({'action': 'pier', 'pier': {'do': 'fish'}}), ['promise'])[0] == []
-    assert '钓鱼' in HOLD_KINDS['spend'] and '座位费不算' in HOLD_KINDS['spend']
+    assert not any(w in HOLD_KINDS['spend'] for w in ('钓鱼', '电玩城', '手作')) and '座位费不算' in HOLD_KINDS['spend']   # 0.4.13：老镇停了，说明里不再列（拦的代码照旧）
