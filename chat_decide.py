@@ -168,10 +168,31 @@ def decided_line(role: str, a: dict, head_over: str = '') -> str:
     return f"{head}：{served or ('定了接下来的计划' if stops and act == 'none' else what)}{doing}{route}{note}"
 
 
+ASK_CONTEXT_N = 40
+
+
+def ask_payload(prompt: str, history, *, on: bool, rules: str = '') -> tuple:
+    """「主聊天拿主意」那一问交给模型的（prompt, contexts）。人设由 main 另给（system_prompt）。
+    on = 「你们的聊天带进小镇」开着、又不在说漏三次的停用期：带这段对话最近 40 条（和以前一样）。
+    0.4.14（协调 11-25）：关着就一条对话都不带，只有人设 + 她留的守则——主人关了就是不想让最近的聊天影响她在小镇的事，和 DSH 插件一样
+    （DSH 那一问在插件自己的会话里问，本来就不带主聊天）。守则两种都带：这一问每次是新的一问，前面没有小镇回合带过的守则。"""
+    t = str(rules or '').strip()
+    text = f'{prompt}\n\n你给小镇这边留的守则（小镇的事照它来）：「{t}」' if t else prompt
+    if not on:
+        return text, []
+    try:
+        h = history if isinstance(history, list) else json.loads(history or '[]')
+    except (TypeError, ValueError):
+        h = []
+    return text, [m for m in h if isinstance(m, dict) and m.get('role') in ('user', 'assistant') and isinstance(m.get('content'), (str, list))][-ASK_CONTEXT_N:]
+
+
 class ChatDecide:
-    def __init__(self, journal, *, ask_main, home_umo, idle_s, config, log=None, now=time.time):
-        """ask_main(text) -> 她带着你们的聊天想一下的回答（0.4.1 起不发给主人、不记进对话）；home_umo() -> 主人私聊；idle_s() -> 主人多久没说话（秒）。"""
+    def __init__(self, journal, *, ask_main, home_umo, idle_s, config, log=None, now=time.time, chat_on=lambda: True):
+        """ask_main(text) -> 她带着你们的聊天想一下的回答（0.4.1 起不发给主人、不记进对话）；home_umo() -> 主人私聊；idle_s() -> 主人多久没说话（秒）。
+        chat_on() -> 「你们的聊天带进小镇」开着、不在停用期（0.4.14：关着就不附在他的话后面问，那一问也不带对话）。"""
         self.j, self.ask_main, self.home_umo, self.idle_s, self.config = journal, ask_main, home_umo, idle_s, config
+        self.chat_on = chat_on
         self.log = log or logging.getLogger('fishbowl_town')
         self.now = now
         self.busy = False
@@ -260,7 +281,8 @@ class ChatDecide:
             return {'role': 'fallback'}
         if self.busy:
             return {'answer': wait_answer(5, NOTE_ASKING)}
-        idle = self.idle_s() >= IDLE_S
+        # 0.4.14：「你们的聊天带进小镇」关着：不附在他的话后面（那样她是在你们的聊天里定的），当他不在，走不带对话的那一问
+        idle = self.idle_s() >= IDLE_S or not self.chat_on()
         if self.piggy and not self.piggy['sent']:
             if self.now() - self.piggy['at'] > PIGGY_FOR_S or self.piggy['umo'] != umo or idle:
                 self.piggy = None
@@ -294,7 +316,7 @@ class ChatDecide:
     # --- 主人在说话：附在他这句话的背景里，她回完读「小镇打算」 ------------------------------------------------------------
     def pending_note(self, umo: str) -> str:
         p = self.piggy
-        if not self.on() or not p or p['sent'] or p['umo'] != umo:
+        if not self.on() or not p or p['sent'] or p['umo'] != umo or not self.chat_on():
             return ''
         if self.now() - p['at'] > PIGGY_FOR_S:
             self.piggy = None

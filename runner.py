@@ -70,7 +70,7 @@ def again_prompt(prompt: str, said: str, correction: str) -> str:
 
 class Runner:
     def __init__(self, client, journal, ask, *, tell=None, notify=None, brief=None, quiet=lambda: None, her_name=lambda: '', log=None, now=time.time,
-                 owner_life=None, on_echo=None, recap=lambda: True, decide=None, see=None, on_event=None, on_turn=None, rand=random.random):
+                 owner_life=None, owner_secret=None, on_echo=None, recap=lambda: True, decide=None, see=None, on_event=None, on_turn=None, rand=random.random):
         self.client, self.journal, self.ask = client, journal, ask
         self.rand = rand              # 0.4.10 重连等待的随机（测试里换成定的）
         self.on_event, self.on_turn = on_event, on_turn   # 0.4.7 一起盖楼（cobuild.py）：isle_build 事件、回合里看到的空地
@@ -79,6 +79,7 @@ class Runner:
         self.tell, self.notify, self.brief = tell, notify, brief
         self.quiet, self.her_name = quiet, her_name
         self.owner_life, self.on_echo, self.recap_on = owner_life, on_echo, recap   # 0.3.0 两边是同一个她
+        self.owner_secret = owner_secret   # 0.4.14 回声检查比的那一份：没过滤的原话（没给就用带进去的那份）
         self.life_refs: dict = {}   # 已经带过「你和主人最近的事」的那几局（一局只在第一轮带）
         self.log = log or logging.getLogger('fishbowl_town')
         self.now = now
@@ -156,6 +157,11 @@ class Runner:
             # 0.3.0：她和主人最近的几句（过滤过）。拿主意、串门每次带；牌局只在一局的第一轮带。回声检查每一轮都比
             life = await self._life()
             secret = None
+            # 0.4.14（协调 11-25）：拿原话比。过滤过的那份里数字串、@谁已经换掉了，她要是把原来的号码说出去，比不出来；停用中（不带了）也照样比
+            raw = await self._life(self.owner_secret) if self.owner_secret else life
+            msgs = (turn.get('packet') or {}).get('messages') or []
+            if raw:
+                secret = echo_index(raw, allow=' '.join(str(m.get('content') if isinstance(m, dict) else '') for m in msgs if isinstance(msgs, list)))
             if life:
                 ref = str((turn.get('packet') or {}).get('ref') or '')
                 if kind in ('agency', 'visit'):
@@ -165,8 +171,6 @@ class Runner:
                     self.life_refs[ref] = self.now()
                     if len(self.life_refs) > 200:
                         self.life_refs.pop(next(iter(self.life_refs)))
-                msgs = (turn.get('packet') or {}).get('messages') or []
-                secret = echo_index(life, allow=' '.join(str(m.get('content') if isinstance(m, dict) else '') for m in msgs if isinstance(msgs, list)))
             prompt = build_turn_prompt(turn, seconds_left=int(self.left(turn, received)), **mind)
             # 0.4.2 鱼缸岛：规矩全文按版本存一份，放在最前面（每一问都是新的一问：人设 + 规矩每次一样，前缀缓存才命中）
             isle_key = isle_version_of(turn) if kind == 'agency' else ''
@@ -319,11 +323,12 @@ class Runner:
         finally:
             self.seen[tid] = 'done'
 
-    async def _life(self) -> list:
-        if not self.owner_life:
+    async def _life(self, fn=None) -> list:
+        fn = fn or self.owner_life
+        if not fn:
             return []
         try:
-            return list(await asyncio.wait_for(self.owner_life(), 2) or [])
+            return list(await asyncio.wait_for(fn(), 2) or [])
         except Exception:  # noqa: BLE001 - 读不到就不带
             return []
 
