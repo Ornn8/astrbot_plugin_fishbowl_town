@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
-from astrbot_plugin_fishbowl_town.chat_decide import PLAN_MARK, ChatDecide  # noqa: E402
+from astrbot_plugin_fishbowl_town.chat_decide import PLAN_MARK, ChatDecide, decided_line  # noqa: E402
 from astrbot_plugin_fishbowl_town.journal import Journal, parse_quiet  # noqa: E402
 from astrbot_plugin_fishbowl_town.prompts import build_turn_prompt  # noqa: E402
 
@@ -48,3 +48,13 @@ def test_the_rules_prompt_says_to_copy_the_line_the_town_gave_into_world():
     p = build_turn_prompt(agency('p1', ['guest']), seconds_left=60, role='rules')
     assert '客人上门、门后的比赛轮到你、别的鱼邀请你' in p
     assert '客人上门、门后的比赛轮到你：照小镇在「等你回」里给的那一句写进 "world"（照抄，只改数目和你要说的话），action 填 none。' in p
+
+
+def test_after_the_rules_role_served_a_guest_her_chat_self_reads_that_she_served_him():
+    reply = {'action': 'none', 'world': {'do': 'reply', 'event': 1, 'actions': [{'op': 'take', 'thing': 'coin', 'n': 10}, {'op': 'say', 'text': '小柒来啦，茶刚沏好。'}]},
+             'plan': {'hours': 1, 'doing': '守着茶摊'}}
+    head = '有件事要马上回，小镇那边按你定的规矩先答了：'
+    assert decided_line('rules', reply) == head + '接待了客人（说「小柒来啦，茶刚沏好。」），打算「守着茶摊」'
+    assert decided_line('rules', {'action': 'none', 'world': {'do': 'door_step', 'run': 'r1', 'choice': 'a'}}) == head + '在门后的比赛里走了一步'
+    assert decided_line('rules', {'action': 'none', 'world': {'do': 'reply', 'event': 2, 'actions': [{'op': 'say', 'text': '…'}]}}) == head + '接待了客人'
+    assert decided_line('rules', {'action': 'none', 'world': {'do': 'go', 'place': '码头'}}) == head + '先不动', 'other world steps: as before'

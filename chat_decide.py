@@ -106,6 +106,21 @@ def wait_answer(minutes: float, note: str) -> str:
     return json.dumps({'action': 'none', 'next_wake': max(5, min(EVERY_MAX, round(minutes))), 'note': note}, ensure_ascii=False)
 
 
+def served_of(a: dict) -> str:
+    """0.4.13 客人上门、门后的比赛：她在 world 里回了，给聊天里的她看的那句写她做了什么（以前写「先不动」，真 DSH 守店 11-24）。"""
+    w = a.get('world') if isinstance(a, dict) and isinstance(a.get('world'), dict) else None
+    if not w or str(a.get('action') or 'none') != 'none':
+        return ''
+    if w.get('do') == 'door_step':
+        return '在门后的比赛里走了一步'
+    if w.get('do') != 'reply':
+        return ''
+    acts = w.get('actions') if isinstance(w.get('actions'), list) else []
+    said = next((x['text'].strip() for x in acts if isinstance(x, dict) and x.get('op') == 'say' and isinstance(x.get('text'), str)
+                 and x['text'].strip() and x['text'].strip() != '…'), '')
+    return f'接待了客人（说「{said[:30]}」）' if said else '接待了客人'
+
+
 def decided_line(role: str, a: dict) -> str:
     if not isinstance(a, dict):
         return ''
@@ -126,7 +141,8 @@ def decided_line(role: str, a: dict) -> str:
             else '你自己定的时间到了，小镇那边照你的打算定了' if role == 'wake'
             else '你刚才说要去小镇，小镇那边照你的意思定了' if role == 'pull'
             else '你在聊天里两次没顾上回，这次小镇那边先替你定了')
-    return f"{head}：{'定了接下来的计划' if stops and act == 'none' else what}{doing}{route}{note}"
+    served = served_of(a)
+    return f"{head}：{served or ('定了接下来的计划' if stops and act == 'none' else what)}{doing}{route}{note}"
 
 
 class ChatDecide:
