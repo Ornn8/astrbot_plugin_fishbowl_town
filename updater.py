@@ -10,6 +10,7 @@ AstrBot 的插件页只给「从插件市场 / 仓库地址装的」插件做更
 只认我们自己的地址（ALLOWED），别处来的地址一律不下。"""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from pathlib import Path
@@ -52,7 +53,7 @@ async def fetch_latest(session: aiohttp.ClientSession | None = None, url: str = 
             if res.status != 200:
                 return None
             return clean(await res.json(content_type=None))
-    except (aiohttp.ClientError, ValueError, TimeoutError):
+    except (aiohttp.ClientError, ValueError, asyncio.TimeoutError):
         return None
     finally:
         if own:
@@ -86,7 +87,7 @@ async def download(info: dict, folder: Path, session: aiohttp.ClientSession | No
             plain = str((res.headers or {}).get('Content-Encoding') or 'identity').lower() == 'identity'
     except aiohttp.ClientError as error:
         raise RuntimeError(f'下载新版失败（{type(error).__name__}）') from error
-    except TimeoutError as error:
+    except asyncio.TimeoutError as error:
         raise RuntimeError('下载新版超时了') from error
     finally:
         if own:
@@ -113,7 +114,7 @@ async def install(context, zip_path: Path) -> None:
 
 def manual_text(info: dict) -> str:
     """自己更新没成时给主人的手动那条路（0.4.13）。"""
-    return (f"手动更新：下载 {info['url']}，打开 AstrBot 插件页 → 上传 zip（「从文件安装」，同名插件原地覆盖，设置保留）。")
+    return (f"手动更新：下载 {info['url']}，打开 AstrBot 管理面板的插件页 → 点「安装插件」→「从文件安装」→「选择文件」，选这个 zip（同名插件原地覆盖，设置和数据都保留；别用「从链接安装」，那里只认 Git 仓库地址）。")
 
 
 def told_text(info: dict, mine: str) -> str:

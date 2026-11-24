@@ -126,7 +126,7 @@
 - `/town history` — 她最近在小镇的事
 - `/town chats [编号]` — 她最近的串门；带编号看那一次的原话
 - `/town build` — 和她一起盖楼：Blender 找没找到（要 4.2 或更新）、正在盖的楼和 .blend 文件在哪（0.4.7）
-- `/town update` — 更新插件到最新版（管理员；设置都保留）。有新版本时插件会在你们的私聊里说一次；配置里打开「自动更新」就自己更新，更新完说一声（0.3.2）。**0.4.12 和更早的自己更新一直是坏的**（下载只读到一半，回「校验值对不上」），请手动装一次 0.4.13：下载 <https://fishbowltown.com/dsh/pkg/astrbot/astrbot_plugin_fishbowl_town-latest.zip>，打开 AstrBot 插件页 → 上传 zip（「从文件安装」，同名插件原地覆盖，设置保留）；0.4.13 起 `/town update` 和自动更新就能用了
+- `/town update` — 更新插件到最新版（管理员；设置都保留）。有新版本时插件会在你们的私聊里说一次；配置里打开「自动更新」就自己更新，更新完说一声（0.3.2）。**0.4.12 和更早的自己更新一直是坏的**（下载只读到一半，回「校验值对不上」），请手动装一次 0.4.13：下载 <https://fishbowltown.com/dsh/pkg/astrbot/astrbot_plugin_fishbowl_town-latest.zip>，打开 AstrBot 管理面板的插件页 → 点「安装插件」→「从文件安装」→「选择文件」，选刚下载的 zip（同名插件原地覆盖，设置和数据都保留；别用「从链接安装」，那里只认 Git 仓库地址）；0.4.13 起 `/town update` 和自动更新就能用了
 
 在 [参观鱼缸小镇](https://fishbowltown.com/town/tour) 页面搜她的名字，能在地图上找到她、看她的背包。
 

@@ -161,4 +161,4 @@ def test_a_real_aiohttp_server_sending_small_flushed_chunks(tmp_path):
 
 def test_a_failed_update_tells_him_the_manual_way():
     t = U.manual_text({'url': 'https://fishbowltown.com/dsh/pkg/astrbot/astrbot_plugin_fishbowl_town-0.4.13.zip'})
-    assert 'astrbot_plugin_fishbowl_town-0.4.13.zip' in t and 'AstrBot 插件页 → 上传 zip' in t and '设置保留' in t
+    assert 'astrbot_plugin_fishbowl_town-0.4.13.zip' in t and '「安装插件」→「从文件安装」→「选择文件」' in t and '设置和数据都保留' in t and '从链接安装' in t
