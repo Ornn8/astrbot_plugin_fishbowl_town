@@ -761,7 +761,7 @@ class FishbowlTown(Star):
         Args:
             do(string): status / start / make / use / submit / confirm / stop
             lot(string): do=start：地号，比如 L-0107；承包的楼也可以填楼号，比如 B-0009
-            idea(string): do=start：你们想盖的，你自己的话（200 字以内）
+            idea(string): do=start：你们想盖的，你自己的话（500 字以内）
             recipe(string): do=make：配方，{"shapes":[形状, …]}，照建模说明写的 JSON
             version(number): do=use：换回第几版
             over_owner(boolean): do=make：主人说不要他亲手改的那些了才填 true（他那一版一直留着）

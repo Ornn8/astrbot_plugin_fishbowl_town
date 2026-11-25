@@ -14,7 +14,7 @@
      cobuild_scripts/owner_layer.py 记下他改了哪些，再用 --from-blend 出新的一版，把预览图发给主人、告诉她尺寸、高度怎么变了。
      她之后再改配方：插件从配方重新做，再把主人改的那一层叠上去（owner_layer.py apply），他改的不被盖掉；他同意不要了才 over_owner。
   5. 交（do=submit）：主人在这个私聊里亲手打的字，在看到这一版以后，明确说了「交吧」这类话，插件才把 glb 交上岛
-     （POST isle/build，owner_words = 他的原话，200 字以内）。岛上当场报价（鲸币）。
+     （POST isle/build，owner_words = 他的原话，整句交给岛上，岛上量：最多 500 字，超了岛上原样说，0.4.15）。岛上当场报价（鲸币）。
   6. 确认（do=confirm）：报价给了她以后，主人又亲手明确说了「盖吧」这类话，插件才确认（POST isle/build/confirm）。
 只讲怎么做、怎么交，不讲楼该长什么样（主人 11-20「不要带风格化的提示词」）。岛上的钱一律叫鲸币；她不劝主人花钱。
 不认识 AstrBot：小镇客户端、发给主人、告诉她，都是传进来的，测试里换成假的。"""
@@ -70,8 +70,7 @@ def see_line(link: str) -> str:
 
 NEED_BLENDER = '盖楼要先装 Blender（4.2 或更新）'
 RUN_S = 120                    # 一次 Blender 最多跑这么久（和岛上建造工人一样 120 秒）
-OWNER_WORDS_MAX = 200
-IDEA_MAX = 200
+# 0.4.15：想法（idea）、主人的原话插件不截，整段交给岛上量（岛上最多 500 字，超了原样说有几个字、什么都没办；小镇 11-26 创作上限 #14）
 PREVIEWS = ('front', 'three_quarter', 'top')
 PREVIEW_ZH = {'front': '正面', 'three_quarter': '斜 45°', 'top': '俯视'}
 WATCH_S = 4                    # 有正在盖的楼时，多久看一眼 house.blend 变没变
@@ -967,7 +966,7 @@ class Cobuild:
             d['at'] = at
         d['lotName'] = clip(g.get('lot_name') or '', 40)
         if isinstance(idea, str) and idea.strip():
-            d['idea'] = clip(idea, IDEA_MAX)
+            d['idea'] = idea.strip()
         d['limits'] = g.get('limits') if isinstance(g.get('limits'), dict) else None
         self.images_dir(d).mkdir(parents=True, exist_ok=True)         # 连草稿目录一起建
         if isinstance(g.get('lot_json'), dict):
@@ -1018,7 +1017,7 @@ class Cobuild:
         except (TypeError, ValueError):
             d['floors'] = None
         if isinstance(idea, str) and idea.strip():
-            d['idea'] = clip(idea, IDEA_MAX)
+            d['idea'] = idea.strip()
         d['limits'] = g.get('limits') if isinstance(g.get('limits'), dict) else None
         self.images_dir(d).mkdir(parents=True, exist_ok=True)         # 连草稿目录一起建
         if isinstance(g.get('room_json'), dict):
@@ -1183,7 +1182,7 @@ class Cobuild:
             return {'why': f'主人看到以后还没在这里亲口说话。等他看过、明确说了{say}再用（插件重载过的话，请他再说一声）。什么都没交、没扣。'}
         if not (is_yes_to(w['text'], yes, no) if yes is not None or no is not None else is_yes(w['text'])):
             return {'why': f"主人最后说的是「{clip(w['text'], 40)}」，听着不像让你{'交' if hand else '确认'}。等他明确说{say}再用（插件只认他自己打的字）。什么都没交、没扣。"}
-        return {'words': str(w['text']).strip()[:OWNER_WORDS_MAX]}
+        return {'words': str(w['text']).strip()}
 
     async def submit(self, key='') -> dict:
         d = self.active()

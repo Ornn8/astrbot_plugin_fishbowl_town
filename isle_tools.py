@@ -75,7 +75,6 @@ FULL_MAX = 6000                  # 「怎么做」里的全文（开店、写程
 # （AstrBot 的工具说明是函数的文档字符串，只能写字面的；测试查两边一字不差），和 DSH 插件 lib/isle-tools.js 的 GUIDE_POINTER 也一字不差。
 # 0.4.9 小镇 11-24：新开的店楼里要先有室内（岛上 doorway.need），说明里一句说清，免得她承包了楼才发现开不了；怎么做室内在岛上查。
 GUIDE_POINTER = '开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。'
-WORDS_MAX = 200
 RETRY_S = 2.0
 
 NOT_YET = '小镇那边还没开这个（主聊天里看岛上、在岛上做事，要等小镇更新）。现在想在岛上看什么、做什么，用 fishbowl_town_go 把打算写下，小镇给你的回合里去办。'
@@ -199,7 +198,7 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
         if up.get('why'):
             return up['why']
         w2 = {**w, 'ref': up['id']}
-    words = clip(owner_words, WORDS_MAX) if isinstance(owner_words, str) else ''
+    words = owner_words.strip() if isinstance(owner_words, str) else ''      # 0.4.15：主人的原话不截
     what = car_what(w) or report_what(w) or VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
     if verb in OWNER_MONEY and not words:
         return f'{what}花的是主人给你的饭票：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'

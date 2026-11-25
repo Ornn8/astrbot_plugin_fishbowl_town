@@ -791,3 +791,25 @@ def test_the_hand_in_carries_the_door_height_the_build_script_measured_and_sends
             assert '交上去了' in (await cb.submit(OWNER))['text']
         run(flow())
         assert town.door_highs == [want]
+
+
+def test_0415_her_idea_and_his_words_go_to_the_island_whole_no_200_cut_here(tmp_path):
+    """0.4.15（小镇 11-26 创作上限 #14）：想法、主人的原话插件不截，整段交给岛上量（岛上最多 500 字，超了原样说）。"""
+    cb, _b, town, _told, _j = setup(tmp_path)
+    idea = '海边的小木屋，两层，屋顶是浅蓝色的，' * 25                       # 450 字
+    words = '窗户朝海，屋顶刷成浅蓝色，门口放两盆花，楼梯在左边，' * 18 + '交吧'      # 470 字
+    yes = '我仔细看过报价了，物业也能接受，' * 20 + '盖吧'
+
+    async def flow():
+        cb.observe_owner(OWNER, '我们盖个房子吧')
+        await cb.start('l-0107', idea)
+        assert '能交' in (await cb.make(json.dumps(RECIPE)))['text']
+        cb.observe_owner(OWNER, words)
+        assert '交上去了' in (await cb.submit(OWNER))['text']
+        sent = next(x[1] for x in town.sent if x[0] == 'build')
+        assert len(sent['idea']) == 450 and sent['idea'] == idea and sent['owner_words'] == words
+        cb.observe_owner(OWNER, yes)
+        await cb.confirm(OWNER)
+        assert next(x[1] for x in town.sent if x[0] == 'confirm')['owner_words'] == yes
+
+    run(flow())
