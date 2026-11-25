@@ -1255,7 +1255,7 @@ def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wal
             for s in shapes:
                 _move(s, dx, dz)
             if edge:
-                return ["整栋往里挪了 %s 米，离地界留够了 %s 米的边" % (_far(dx, dz), _m(edge))]
+                return ["整栋往里挪了 %s 米，离地界留够了 %s" % (_far(dx, dz), _edge_w(edge))]
             return ["整栋伸出%s %s 米，整栋往里挪了贴着%s放" % (wall, _far(dx, dz), wall)]
     groups: dict = {}
     for k, s in enumerate(shapes):
@@ -1273,7 +1273,7 @@ def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wal
         return []
     more = " 等 %d 件" % len(said) if len(said) > 3 else ""
     if edge:
-        return ["、".join(said[:3]) + more + "：离地界不够 %s 米，推回来留够了边" % _m(edge)]
+        return ["、".join(said[:3]) + more + "：离地界不够 %s，推回来留够了边" % (("%s 米" % _m(edge)) if isinstance(edge, (int, float)) else "要留的边")]
     return ["、".join(said[:3]) + more + "：推回%s里贴着%s放了" % ("屋" if wall == "墙" else "地界", wall)]
 
 
@@ -1359,6 +1359,25 @@ def read_keep(lot) -> dict:
     return {s: float(k[s]) for s in EDGE_SIDES if _finite(k.get(s)) and 0 < float(k[s]) <= 5}
 
 
+def read_keep_was(lot) -> dict:
+    """lot.json 的 "keep_was"（重盖已经有的楼，协调 11-25：原来有多少留多少，不许比原来更挤）-> {面: 原来的楼留了几米}：
+    这几面要留的边照原来的楼算（比 0.5 米少），话里说「原来的楼留了 X 米」。只认 keep 里也有的面。"""
+    k, keep = (lot.get("keep_was") if isinstance(lot, dict) else None), read_keep(lot)
+    if not isinstance(k, dict):
+        return {}
+    return {s: float(k[s]) for s in EDGE_SIDES if s in keep and _finite(k.get(s)) and 0 <= float(k[s]) <= 5}
+
+
+def keep_edge(lot):
+    """推回来的话里说留了多少：几面一样 -> 那个数；不一样（重盖：有的面照原来的楼）-> "要留"；没留边 -> None。"""
+    vals = sorted(set(read_keep(lot).values()))
+    return None if not vals else vals[0] if len(vals) == 1 else "要留"
+
+
+def _edge_w(edge) -> str:
+    return "%s 米的边" % _m(edge) if isinstance(edge, (int, float)) else "%s的边" % edge
+
+
 def keep_box(lot):
     """长方形的地扣掉要留的边以后能盖的范围 (x0, z0, x1, z1)；多边形的地、没留边 -> None。"""
     keep = read_keep(lot)
@@ -1407,15 +1426,18 @@ def keep_problems(num: dict, lot, parts=None, head: str = "") -> list:
             k = keep.get(side, 0.0)
             if k and g < k - EDGE_EPS and (side not in worst or g < worst[side]):
                 worst[side] = g
+        was = read_keep_was(lot)
         for side in EDGE_SIDES:
             if side in worst:
                 g = worst[side]
-                P.append("%s%s离地界只有 %s 米，至少留 %s 米：往里收 %s 米" % (head, EDGE_ZH[side], _m(max(g, 0.0)), _m(keep[side]), _m(_up(keep[side] - g))))
+                P.append("%s%s离地界只有 %s 米%s，至少留 %s 米：往里收 %s 米" % (head, EDGE_ZH[side], _m(max(g, 0.0)), _was_words(was, side), _m(keep[side]),
+                                                                 _m(_up(keep[side] - g))))
         return P
     w, d = float(lot["w"]), float(lot["d"])
     bbox = num["bbox"]
     gaps = _edge_gaps(bbox, w, d)
     said = set()
+    was = read_keep_was(lot)
     for side in EDGE_SIDES:
         k, g = keep.get(side, 0.0), gaps[side]
         if not k or g >= k - EDGE_EPS:
@@ -1434,8 +1456,13 @@ def keep_problems(num: dict, lot, parts=None, head: str = "") -> list:
         if parts:
             bad = sorted(((_edge_gaps(pt[1], w, d)[side], j, pt[0]) for j, pt in enumerate(parts)), key=lambda x: (x[0], x[1]))
             names = _named([nm for gg, _j, nm in bad if gg < k - EDGE_EPS])
-        P.append(head + start + "，至少留 %s 米" % _m(k) + tail + names)
+        P.append(head + start + _was_words(was, side) + "，至少留 %s 米" % _m(k) + tail + names)
     return P
+
+
+def _was_words(was: dict, side: str) -> str:
+    """重盖：「，原来的楼留了 0.1 米」（这一面要留的边照原来的楼算）；不是 -> ""。"""
+    return "，原来的楼留了 %s 米" % _m(was[side]) if side in was else ""
 
 
 def keep_words(lot) -> str:
@@ -1443,11 +1470,15 @@ def keep_words(lot) -> str:
     keep = read_keep(lot)
     if not keep:
         return ""
-    m = _m(max(keep.values()))
+    vals = sorted(set(keep.values()))
+    one = len(vals) == 1 and not read_keep_was(lot)
+    each = "、".join("%s %s 米" % (EDGE_ZH[s], _m(keep[s])) for s in EDGE_SIDES if s in keep)   # 重盖（keep_was）：各面照原来的楼
     if lot.get("poly_uv"):
-        return "能盖的范围：地界往里留 %s 米的边（朝路那面不用）" % m
+        return ("能盖的范围：地界往里留 %s 米的边（朝路那面不用）" % _m(vals[0]) if one
+                else "能盖的范围：地界往里留边（%s；朝路那面不用，重盖不比原来的楼更挤）" % each)
     x0, z0, x1, z1 = keep_box(lot)
-    return "能盖的范围：左右 %s 米、前后 %s 米（已扣掉 %s 米的边）" % (_m(x1 - x0), _m(z1 - z0), m)
+    return "能盖的范围：左右 %s 米、前后 %s 米（%s）" % (_m(x1 - x0), _m(z1 - z0), "已扣掉 %s 米的边" % _m(vals[0]) if one
+                                                    else "已扣掉要留的边：%s；重盖不比原来的楼更挤" % each)
 
 
 def tex_problems(tex, limits: dict, per: str = "") -> list:
@@ -3051,7 +3082,7 @@ def run(a) -> dict:
         if lot and not lot.get("poly_uv"):                   # (多边形的地照旧：斜边上推哪边说不清)
             hw, hd = lot["w"] / 2, lot["d"] / 2
             kb = keep_box(lot)                               # 要留边的：推进能盖的范围（主人 11-25 定 0.5 米），推完还不够的照样判问题
-            notes += nudge_in(shapes, kb or (-hw, -hd, hw, hd), whole=True, wall="地界", edge=max(read_keep(lot).values()) if kb else None)
+            notes += nudge_in(shapes, kb or (-hw, -hd, hw, hd), whole=True, wall="地界", edge=keep_edge(lot) if kb else None)
         coll = bpy.data.collections.new("house")
         sc.collection.children.link(coll)
         for k, s in enumerate(shapes):
