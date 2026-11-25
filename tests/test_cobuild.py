@@ -197,7 +197,7 @@ def test_vendored_scripts_are_the_islands_byte_for_byte_and_never_eval():
     assert b'\r\n' not in C.SCRIPT_FILE.read_bytes() and b'\r\n' not in C.LAYER_FILE.read_bytes()
     # 0.4.15 和小镇 11-26 包（feat/1126-pack2：门离地多高、0.3 米推回去）那一份一样；那个工作区不在就不比（插件在仓库根下或套一层都找得到）
     for top in (ROOT.parent, ROOT.parent.parent):
-        server = top / 'wt-1126-draft-receipts' / 'ops' / 'revenue-20261022' / 'fishbowl-town' / 'tools' / 'cobuild' / 'recipe_to_blend.py'
+        server = top / 'wt-1127-owner-door' / 'ops' / 'revenue-20261022' / 'fishbowl-town' / 'tools' / 'cobuild' / 'recipe_to_blend.py'
         if server.exists():
             assert hashlib.sha256(server.read_bytes()).hexdigest() == C.SCRIPT_SHA256, 'same as the server copy'
     dsh = ROOT.parent / 'wt-dsh-cobuild' / 'lib' / 'cobuild' / 'owner_layer.py'

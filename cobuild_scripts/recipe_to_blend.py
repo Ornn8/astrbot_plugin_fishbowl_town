@@ -1320,6 +1320,39 @@ def door_high(shapes) -> dict | None:
     return {"low": round(low, 2), "up": round(low - ref, 2)}
 
 
+NO_DOOR_LINE = "没认出入户门：把门的部件名起成「门」或 door，岛上才能查门高"     # 主人自己传的模型里认不出门（协调 11-25）：不拦，回执原样说这一句
+
+
+def door_high_parts(parts) -> dict | None:
+    """主人自己传的 .blend / .glb（11-27）：照物体的名字认入户门（「入户门 / 大门 / …门 / door」，高 1.6 到 4.5 米）和台阶（「踏步 / 台阶 / step / stair」），
+    和配方一样量 -> {"low", "up"}；认不出门 -> None（不查，回执说 NO_DOOR_LINE）。``parts``：eval_copies 出来的物体（名字后面带 " (part)"）。"""
+    doors, steps = [], []
+    for ob in parts or []:
+        nm = str(ob.name)
+        nm = nm[:-7] if nm.endswith(" (part)") else nm
+        nm = nm.split(".")[0].strip() if "." in nm and nm.rsplit(".", 1)[-1].isdigit() else nm.strip()    # Blender 的「门.001」
+        V = [_from_b(v.co) for v in ob.data.vertices]
+        if not nm or not V:
+            continue
+        y0, y1 = min(p[1] for p in V), max(p[1] for p in V)
+        if any(w in nm.lower() for w in STEP_WORDS):
+            steps.append(y1)
+        elif _owner_door(nm) and DOOR_TALL[0] <= y1 - y0 <= DOOR_TALL[1]:
+            doors.append(y0)
+    if not doors:
+        return None
+    low = min(doors)
+    ref = max([0.0] + [t for t in steps if t <= low + 0.01])
+    return {"low": round(low, 2), "up": round(low - ref, 2)}
+
+
+def _owner_door(nm: str) -> bool:
+    """主人起的名字认不认得出是入户门：整个名字，或者用空格 / 下划线 / 横线隔开的某一段（「013 门」「门_front」）。"""
+    if any(w in nm for w in NOT_DOOR):
+        return False
+    return _is_door(nm) or any(_is_door(t) for t in nm.replace("_", " ").replace("-", " ").split())
+
+
 def door_high_words(high) -> str | None:
     """{"low", "up"} -> 「门离地 4.25 米，挪到一楼」（门在楼上）| None。插件交楼时带上来，岛上照这一句退。"""
     if not isinstance(high, dict) or not _finite(high.get("up")) or not _finite(high.get("low")) or high["up"] <= DOOR_UP_MAX:
@@ -3121,6 +3154,7 @@ def run(a) -> dict:
     if boxes is not None:
         parts_named = boxes if len(boxes) > 1 else None   # (one object is the whole house: naming it says nothing)
     num, _ = measure_parts(parts, foot=True)              # foot：多边形的地照楼从上往下看的外轮廓查出界（11-25）
+    owner_high = door_high_parts(parts) if mode != "recipe" else None    # (before the export: it joins the parts into one)
     num["objects"] = len(obs)
     if mode == "recipe":
         num["shapes"] = len(shapes)
@@ -3130,8 +3164,10 @@ def run(a) -> dict:
         num["blend_kb"] = max(1, int(math.ceil(os.path.getsize(a.out_blend) / 1024)))
     files = {"glb": os.path.abspath(a.out_glb), "blend": os.path.abspath(a.out_blend) if a.out_blend else None, "previews": []}
     P = problems_of(num, lot, limits, parts_named)
-    if mode == "recipe":                                     # 门在楼上（11-26）：判问题；量出来的数带回去，插件交楼时岛上照它退
-        high = door_high(shapes)
+    if mode in ("recipe", "blend", "glb"):                   # 门在楼上（11-26）：判问题；量出来的数带回去，插件交楼时岛上照它退
+        high = door_high(shapes) if mode == "recipe" else owner_high                    # 主人自己传的（11-27）：照物体的名字认门
+        if high is None and mode != "recipe":
+            notes.append(NO_DOOR_LINE)                       # 认不出门：不拦，说一句怎么让岛上查得了
         if high is not None:
             num["door_high"] = high
             if door_high_words(high):

@@ -42,8 +42,8 @@ HERE = Path(__file__).resolve().parent
 SCRIPT_FILE = HERE / 'cobuild_scripts' / 'recipe_to_blend.py'
 LAYER_FILE = HERE / 'cobuild_scripts' / 'owner_layer.py'
 # 小镇 tools/cobuild/recipe_to_blend.py（11-26 配方第 2 版：倒角、旋转体、扫掠、软垫、图案、自己的图、defs + use；
-# 0.4.15 换成 11-26 包那一份：量入户门离地多高 numbers.door_high、门在楼上判问题，伸出墙 / 地界 0.3 米以内的推回去；11-26 留边：lot.json 的 keep 写了哪几面，楼离地界不到 0.5 米算问题、推回能盖的范围；重盖照原来的楼 keep_was）的 sha256：插件原样带着，测试查一字不差
-SCRIPT_SHA256 = 'ffdde06d757fa69f93c2c4dfa20371bbdd89f46920fad21cca5f4ede1d61c686'
+# 0.4.15 换成 11-26 包那一份：量入户门离地多高 numbers.door_high、门在楼上判问题，伸出墙 / 地界 0.3 米以内的推回去；11-26 留边：lot.json 的 keep 写了哪几面，楼离地界不到 0.5 米算问题、推回能盖的范围；重盖照原来的楼 keep_was；11-27 主人自己改的 .blend / .glb 照物体的名字认门查门高，认不出 notes 里说一句）的 sha256：插件原样带着，测试查一字不差
+SCRIPT_SHA256 = '8abe61456c952e3ec5688d2b7185908db68b35d48ddf060f419246b9c0c5f201'
 IMAGES_DIR = 'images'          # 草稿里放她自己的图（主人传的、她生成的）的文件夹：配方的 image 按文件名从这里找（--images）
 MIN_BLENDER = (4, 2)
 BLENDER_URL = 'https://www.blender.org/download/'

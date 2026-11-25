@@ -16,6 +16,7 @@ blender -b --factory-startup -P recipe_to_blend.py -- --room room.json --recipe 
 - `--recipe`：配方做成楼。`.blend` 里每个形状一个物体（名字 `001 box wood`），地是单独一个集合 `LOT (not exported)`（只给人看地界，不导出）。
 - `--from-blend`：主人在 Blender 里改过的文件 → 导出 glb、预览图、尺寸。只导出看得见的网格；`LOT (not exported)` 集合里的、隐藏的、曲线和文字（先转成网格）不导出。
 - `--from-glb`：一个现成的 glb（主人自己从零建的）→ 同上，另存一份 `.blend`。
+  这两种都照物体的名字认入户门（名字里有「门」或 door，「门牌 / 门框 / 门把」不算，高 1.6–4.5 米）和台阶（「踏步 / 台阶 / step / stair」），认得出就和配方一样量门离地多高（`numbers.door_high`，门在楼上 `problems` 里说「门离地 X 米，挪到一楼」）；认不出不拦，`notes` 里原样一句「没认出入户门：把门的部件名起成「门」或 door，岛上才能查门高」。
 - `--previews DIR`：`front.png`（从门口那边看）、`three_quarter.png`（斜 45°）、`top.png`（俯视，上方是地的后边），512 × 512。`--px` 改大小。
   用 EEVEE 画（看得出材料的质感、图案和她的图，三张几秒）；EEVEE 起不来（没显卡的服务器）用 Cycles（样本少、降噪，两个线程三张 30 秒上下），
   再不行退 Workbench（只有颜色）。`--preview-engine eevee|cycles|workbench|auto` 指定（也可以设环境变量 `COBUILD_PREVIEW_ENGINE`），不写 = auto：
