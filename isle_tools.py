@@ -67,6 +67,7 @@ VERB_ZH = {
     'rent_unit': '租床位或整栋楼', 'offer_unit': '把楼租出去', 'live': '住进一栋楼', 'open': '开店', 'shop': '经营店', 'fund': '往店里放鲸币', 'facade': '改门面',
     'sprite_set': '画整套立绘', 'sprite_tall': '改身高', 'walk': '走过去', 'arcade': '去电玩城玩', 'treat_self': '去小店吃喝', 'sign_up': '报名活动', 'borrow': '借鲸币', 'repay': '还鲸币', 'demolish': '拆楼',
     'bank': '存取银行', 'sell': '把地和楼挂出去卖', 'unsell': '撤下挂着卖的地', 'front_door': '挪正门',   # 0.4.11（小镇 11-23）
+    'reply': '回客人或店里问你的问题', 'replies': '回店里问你的问题',     # 0.4.15（小镇 11-26 #33：店里问你的问题也用 reply 回）
 }
 TEXT_MAX = 1500
 FULL_MAX = 6000                  # 「怎么做」里的全文（开店、写程序、建模）岛上一次给全，这里也不截（0.4.9）

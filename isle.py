@@ -175,13 +175,76 @@ def unattach(text: str) -> str:
     return _PICS_HEAD.sub(NO_PICS_HEAD, text)
 
 
-def build_read_followup(read: dict, text: str, left: int) -> str:
-    """查到的那一页递回给她的话。"""
+# 0.4.15 程序放宽到 16k（小镇 fix/1126-code-16k）：岛上的决定回合 packet.reply 多一个 code_max_chars（16000，不进提示）。
+# 这一回合她查了写程序的接口（look 怎么做 写程序，或开店里自己写程序那一步），插件告诉她：整段回答到 24000 字、程序 code_max_chars 字，
+# 不受开头「只输出一段 JSON（不超过 N 字）」的字数限制；平常回合 N 一字不动。交之前插件照小镇的算法量一下，超了把小镇那句原话给她、请她删短再交。
+CODE_ANSWER_MAX = 24000
+CODE_VERBS = ('写程序', 'sdk', 'code')
+PROGRAM_KEYS = ('code', 'rules')
+
+
+def code_limit_of(turn) -> dict | None:
+    """这一回合交程序的两个上限 {code, total}；回合里没带 code_max_chars（不是岛上的决定回合、旧小镇）-> None。"""
+    p = (turn or {}).get('packet') if isinstance(turn, dict) else None
+    reply = p.get('reply') if isinstance(p, dict) else None
+    try:
+        n = int((reply or {}).get('code_max_chars') or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return {'code': n, 'total': max(CODE_ANSWER_MAX, n)} if n > 0 else None
+
+
+def is_code_read(read) -> bool:
+    """查的是写程序的那一页：「怎么做」写程序（sdk、code），或「开店」里讲自己写程序的那一步。"""
+    if not isinstance(read, dict) or read.get('topic') != '怎么做':
+        return False
+    v = str(read.get('verb') or read.get('do_what') or read.get('what') or '').strip()
+    return v in CODE_VERBS or (v.startswith('开店') and '程序' in v)
+
+
+def code_line(lim: dict) -> str:
+    """递回写程序那一页时多说的一句。"""
+    return f"【这一回合交程序】整段回答最多 {lim['total']} 字、程序本身（code / rules）最多 {lim['code']} 字，不受开头「不超过 N 字」的限制；不交程序还照原来的字数。"
+
+
+def code_too_long(answer, lim) -> str:
+    """交之前量一下（和小镇一样：整段按去掉空格的 JSON 算字数，程序是回答里最长的 code / rules）；超了回小镇会说的那句，没超回 ''。"""
+    if not lim or not isinstance(answer, str):
+        return ''
+    try:
+        obj = json.loads(answer)
+    except ValueError:
+        return ''
+    stack, best, seen = [obj], 0, 0
+    while stack and seen < 5000:
+        x = stack.pop()
+        seen += 1
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k in PROGRAM_KEYS and isinstance(v, str):
+                    best = max(best, len(v))
+                elif isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(x, list):
+            stack.extend(v for v in x if isinstance(v, (dict, list)))
+    if best > lim['code']:
+        return f"程序太长了：现在 {best} 字，最多 {lim['code']} 字"
+    n = len(json.dumps(obj, ensure_ascii=False, separators=(',', ':')))
+    return f"回答太长了：现在 {n} 字，最多 {lim['total']} 字" if n > lim['total'] else ''
+
+
+def build_too_long_followup(why: str) -> str:
+    """超了：小镇那句原话给她，请她删短再交。"""
+    return f'这份回答交不了：{why}。时间还够：把程序删短一些（或者这一回合先不交程序），照原来的要求只输出那段 JSON 再交一次。'
+
+
+def build_read_followup(read: dict, text: str, left: int, code: dict | None = None) -> str:
+    """查到的那一页递回给她的话（code：这一回合查过写程序那一页 -> 多说两个上限）。"""
     topic = (TOPIC_ZH['建模'] if read.get('topic') == '怎么做' and _BUILD_VERB.search(str(read.get('verb') or ''))
              else TOPIC_ZH.get(read.get('topic')) or read.get('topic') or '岛上')
     tail = (f'接着拿主意：照原来的要求只输出那段 JSON。还想看别的可以再写一次 look（这一回合还能查 {left} 次），想好了就直接写你要做的事。'
             if left > 0 else '这一回合查不了了：现在就照原来的要求只输出那段 JSON，写你要做的事（不再写 look）。')
-    return '\n'.join([f'【你刚查的：{topic}】', text or '（这一页是空的）', '', tail])
+    return '\n'.join([f'【你刚查的：{topic}】', text or '（这一页是空的）', '', *([code_line(code)] if code else []), tail])
 
 
 class Isle:
@@ -226,16 +289,18 @@ class Isle:
         ask(text[, images]) -> 她的原话（异步，出错回 ''）；to_answer(raw) -> 交给小镇的字符串或 None；left() -> 还剩几秒。
         see(pics) -> 能附给她的图（base64:// 串的列表；她的模型看不了图、取图失败回 []）。"""
         cur, reads = answer, 0
+        lim = code_limit_of(turn)
+        code = None   # 0.4.15：这一回合查过写程序的那一页（岛上的决定回合）-> {code, total}，后面递回的每一页都带那一句
         while True:
             read = read_of(cur) if cur is not None else None
             if not read:
-                return {'answer': cur, 'reads': reads}
+                return {'answer': cur, 'reads': reads, 'code': code}
             if reads >= max_reads or left() < min_s or not hasattr(self.client, 'isle_read'):
                 if left() >= min_s:
-                    again = to_answer(await ask(build_read_followup(read, '（这一回合查不了了）', 0)))
+                    again = to_answer(await ask(build_read_followup(read, '（这一回合查不了了）', 0, code)))
                     if again is not None and not read_of(again):
-                        return {'answer': again, 'reads': reads}
-                return {'answer': drop_look(cur), 'reads': reads, 'cut': True}   # 还是在查：look 不交给小镇，别的照交
+                        return {'answer': again, 'reads': reads, 'code': code}
+                return {'answer': drop_look(cur), 'reads': reads, 'cut': True, 'code': code}   # 还是在查：look 不交给小镇，别的照交
             reads += 1
             pics, images = [], []
             try:
@@ -243,6 +308,8 @@ class Isle:
                 if isinstance(r, dict) and r.get('ok') is not False:
                     text = clip(r.get('text'), text_max(read)) + (f'\n（还有下一页：再查一次，写 "page": "{clip(r.get("next"), 40)}"）' if r.get('next') else '')
                     pics = pics_of(r)
+                    if lim and is_code_read(read):
+                        code = lim
                 else:
                     text = f"这次没查到：{clip((r or {}).get('text') if isinstance(r, dict) else '', 120) or '小镇没说为什么'}。就按你手上的情况拿主意。"
             except Exception as error:  # noqa: BLE001 - 查不到就按手上的定
@@ -252,8 +319,8 @@ class Isle:
                     images = list(await see(pics) or [])[:PIC_MAX]
                 except Exception as error:  # noqa: BLE001 - 图取不到：只给字
                     self.log.info(f'查到的图这次没取到（{getattr(error, "code", None) or error}），只给她图上画的是什么')
-            follow = build_read_followup(read, text + pic_note(pics, bool(images)), max_reads - reads)
+            follow = build_read_followup(read, text + pic_note(pics, bool(images)), max_reads - reads, code)
             nxt = to_answer(await (ask(follow, images) if images else ask(follow)))
             if nxt is None:   # 看完那一下没答上（超时、读不了）：用她上一次的回答，去掉 look
-                return {'answer': drop_look(cur), 'reads': reads, 'cut': True}
+                return {'answer': drop_look(cur), 'reads': reads, 'cut': True, 'code': code}
             cur = nxt

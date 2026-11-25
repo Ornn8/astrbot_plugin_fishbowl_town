@@ -13,7 +13,8 @@ from . import events as ev
 from .chat_decide import NOTE_EXECUTED
 from .bridge import ECHO_CORRECTION, echo_check, echo_index, recap_game, recap_visit
 from .build import SKIP, build_again, build_max_chars, build_note, build_prompt, build_within_s, is_build, read_build
-from .isle import Isle, PicsRefused, isle_ask_of, isle_version_of, isle_within_s, stops_of, stops_text, unattach
+from .isle import (Isle, PicsRefused, build_too_long_followup, code_limit_of, code_too_long, isle_ask_of, isle_version_of, isle_within_s,
+                   read_of, stops_of, stops_text, unattach)
 from .journal import cant_why, play_of
 from .prompts import build_correction, build_hold_correction, build_turn_prompt, hold_check, to_answer
 from .town_client import TownError, transient
@@ -205,6 +206,19 @@ class Runner:
                     self.log.info(f"回合 {tid}：她先查了 {r['reads']} 次岛上的情况{'（没查完就到点了）' if r.get('cut') else ''}")
                 answer = r['answer']
                 prompt, raw = conv['text'], conv['said'] or raw
+            # 0.4.15 程序放宽到 16k：岛上的决定回合交之前照小镇的算法量一下；超了把小镇会说的那句给她、请她删短再交一次（时间够才问；还超就照交，小镇回为什么）
+            code_lim = code_limit_of(turn) if kind == 'agency' else None
+            if answer is not None and code_lim:
+                why = code_too_long(answer, code_lim)
+                if why and self.left(turn, received) >= RETRY_MIN:
+                    self.log.info(f'回合 {tid}：{why}，请她删短了再交')
+                    try:
+                        raw2 = await self._ask(again_prompt(prompt, raw, build_too_long_followup(why)), self.left(turn, received))
+                    except Exception:  # noqa: BLE001 - 没答上就照交，小镇回为什么
+                        raw2 = ''
+                    again = to_answer(turn, raw2)
+                    if again is not None and not read_of(again):
+                        answer, raw = again, raw2
             # 她要先停住的事（请客送礼 / 答应约定）：请那边重答一次，还写着就插件拿掉；停住的事记给和主人聊天的她
             if answer is not None and rules['hold']:
                 found, clean = hold_check(kind, answer, rules['hold'])

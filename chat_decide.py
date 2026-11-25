@@ -131,6 +131,8 @@ def served_of(a: dict) -> str:
         return ''
     if w.get('do') == 'door_step':
         return '在门后的比赛里走了一步'
+    if w.get('do') == 'replies' or (w.get('do') == 'reply' and w.get('q') is not None and w.get('event') is None):
+        return '回了店里问你的问题'                                   # 0.4.15（小镇 11-26 #33）：她当客人回店里的问题，不是接待客人
     if w.get('do') != 'reply':
         return ''
 

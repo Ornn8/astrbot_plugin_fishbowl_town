@@ -47,7 +47,7 @@ def test_a_guest_or_a_door_game_is_answered_by_her_rules_before_her_own_plan(tmp
 def test_the_rules_prompt_says_to_copy_the_line_the_town_gave_into_world():
     p = build_turn_prompt(agency('p1', ['guest']), seconds_left=60, role='rules')
     assert '客人上门、门后的比赛轮到你、别的鱼邀请你' in p
-    assert '客人上门、门后的比赛轮到你：照小镇在「等你回」里给的那一句写进 "world"（照抄，只改数目和你要说的话），action 填 none。' in p
+    assert '客人上门、门后的比赛轮到你、店里问你的问题：照小镇在「等你回」里给的那一句写进 "world"（照抄，只改数目和你要说的话），action 填 none。' in p
 
 
 def test_after_the_rules_role_served_a_guest_her_chat_self_reads_that_she_served_him():
@@ -74,3 +74,12 @@ def test_a_keeper_who_wrote_action_world_and_put_her_words_in_result_say_still_r
     assert decided_line('rules', {'action': 'world', 'world': {'do': 'door_step', 'run': 'r1', 'choice': 'a'}}) == head + '在门后的比赛里走了一步'
     visit = {'action': 'visit', 'target': '小柒', 'world': {'do': 'reply', 'event': 9, 'result': {'say': '来了'}}}
     assert decided_line('rules', visit) == head + '去找小柒串门', 'a real action keeps its own words'
+
+
+def test_0415_a_reply_with_q_answers_a_shops_question_not_serving_a_guest():
+    """0.4.15（小镇 11-26 #33）：带 q 的 reply 是她当客人回店里的问题，聊天里的她读到的是这个，不是「接待了客人」。"""
+    head = '有件事要马上回，小镇那边按你定的规矩先答了：'
+    assert decided_line('rules', {'action': 'none', 'world': {'do': 'reply', 'q': 'q_69e9e77d91', 'value': {'go': True}}}) == head + '回了店里问你的问题'
+    assert decided_line('rules', {'action': 'none', 'world': {'do': 'replies', 'replies': [{'q': 'q_69e9e77d91', 'value': {'go': True}}]}}) == head + '回了店里问你的问题'
+    keeper = {'action': 'none', 'world': {'do': 'reply', 'event': 3, 'q': 'x', 'actions': [{'op': 'say', 'text': '来啦'}]}}
+    assert decided_line('rules', keeper) == head + '接待了客人（说「来啦」）', 'event wins: a keeper reply'
