@@ -1186,6 +1186,142 @@ def recipe_parts(raw, shapes, feet: bool = False) -> list:
     return out
 
 
+NUDGE_MAX = 0.3                     # 伸到墙外 / 地界外这么多以内：推回去贴着放，不判问题（协调 11-25：招牌伸出 0.05 米整版判交不了，太严）
+
+
+def _top_of(s: dict, k: int) -> str:
+    """读好的形状属于配方的第几个（use 套出来的、repeat 摆出来的都算那一个）：「第 3 个（椅子）的第 2 件：…」-> "3"。"""
+    lb = str(s.get("label") or "")
+    if lb.startswith("第 "):
+        n = lb[2:].split(" ", 1)[0]
+        if n.isdigit():
+            return n
+    return "#%d" % k
+
+
+def _span(items) -> list:
+    V = [p for s in items for p in placed(s)]
+    return [min(p[0] for p in V), min(p[2] for p in V), max(p[0] for p in V), max(p[2] for p in V)]
+
+
+def _push(lo: float, hi: float, a: float, b: float, cap: float):
+    """[a, b] 推进 [lo, hi] 要挪多少：0 = 本来就在里面；None = 伸出超过 cap、或者比 [lo, hi] 还宽（推不进去）。"""
+    if a >= lo - EDGE_EPS and b <= hi + EDGE_EPS:
+        return 0.0
+    if b - a > hi - lo + EDGE_EPS:
+        return None
+    d = lo - a if a < lo - EDGE_EPS else hi - b
+    return d if abs(d) <= cap + 1e-9 else None
+
+
+def _move(s: dict, dx: float, dz: float) -> None:
+    """整个形状在岛上平移 (dx, 0, dz)：套了外层的挪外层，没套的挪 pos（转过的也一样，平移不改形状）。"""
+    if s.get("T"):
+        R, t = s["T"]
+        s["T"] = (R, (t[0] + dx, t[1], t[2] + dz))
+    else:
+        s["pos"] = [s["pos"][0] + dx, s["pos"][1], s["pos"][2] + dz]
+
+
+def _far(dx: float, dz: float) -> str:
+    return ("%.2f" % max(abs(dx), abs(dz))).rstrip("0").rstrip(".")
+
+
+def _call(items) -> str:
+    """推了的那一件怎么称呼（给主人也看得懂，不带 type）：写了名字的「招牌」、use 套的「椅子」、都没有的「第 44 个形状」。"""
+    head = str(items[0].get("label") or "").split("：", 1)
+    first = head[0]
+    if "（" in first:
+        return "「%s」" % first.split("（", 1)[1].split("）", 1)[0]
+    if len(items) == 1 and len(head) > 1 and "「" in head[1]:
+        return "「%s」" % head[1].split("「", 1)[1].rstrip("」")
+    return first + "形状" if first.endswith("个") else first
+
+
+def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wall: str = "墙") -> list:
+    """伸出 box [x0, z0, x1, z1]（屋里、或者长方形的地）cap 米以内的，推回去贴着边放（原地改 shapes）-> 推了什么的几句（记进 notes）。
+    一件一件推：配方的一个形状算一件（use 套出来的椅子、repeat 摆的一排整件一起挪，不拆开）。``whole``（楼）：整栋先一起挪，
+    整栋挪得进去就只挪整栋（不走样）；挪不进去再一件一件推。伸出超过 cap 的、比屋子还宽的不动：照旧判问题。"""
+    if not shapes:
+        return []
+    x0, z0, x1, z1 = box
+    if whole:
+        a = _span(shapes)
+        dx, dz = _push(x0, x1, a[0], a[2], cap), _push(z0, z1, a[1], a[3], cap)
+        if dx is not None and dz is not None:
+            if not (dx or dz):
+                return []
+            for s in shapes:
+                _move(s, dx, dz)
+            return ["整栋伸出%s %s 米，整栋往里挪了贴着%s放" % (wall, _far(dx, dz), wall)]
+    groups: dict = {}
+    for k, s in enumerate(shapes):
+        groups.setdefault(_top_of(s, k), []).append(s)
+    said = []
+    for items in groups.values():
+        a = _span(items)
+        dx, dz = _push(x0, x1, a[0], a[2], cap), _push(z0, z1, a[1], a[3], cap)
+        if dx is None or dz is None or not (dx or dz):
+            continue
+        for s in items:
+            _move(s, dx, dz)
+        said.append("%s伸出%s %s 米" % (_call(items), wall, _far(dx, dz)))
+    if not said:
+        return []
+    more = " 等 %d 件" % len(said) if len(said) > 3 else ""
+    return ["、".join(said[:3]) + more + "：推回%s里贴着%s放了" % ("屋" if wall == "墙" else "地界", wall)]
+
+
+DOOR_WORDS = ("入户门", "大门", "正门", "前门", "主门", "门扇", "door", "entrance")
+NOT_DOOR = ("门头", "门灯", "门牌", "门廊", "踏步", "门框", "门槛", "门帘", "门把", "门前", "门楣", "雨棚", "门口", "门柱", "门洞", "门垫", "柜门", "车库")
+STEP_WORDS = ("踏步", "台阶", "阶梯", "step", "stair")
+DOOR_UP_MAX = 0.6                   # 楼的入户门底边比地面（或门前台阶顶）高出这么多以上：门在楼上，判问题（协调 11-25：庄欣第 15 版门底边离地 4.25 米）
+DOOR_TALL = (1.6, 4.5)
+
+
+def _shape_name(s: dict) -> str:
+    """形状的 name；use 套出来的没写 name 就用部件名（label「第 3 个（大门）的第 1 件」）。"""
+    if isinstance(s.get("name"), str) and s["name"].strip():
+        return s["name"].strip()
+    lb = str(s.get("label") or "").split("：", 1)[0]
+    return lb.split("（", 1)[1].split("）", 1)[0] if "（" in lb else ""
+
+
+def _is_door(name: str) -> bool:
+    low = name.lower()
+    if any(w in name for w in NOT_DOOR):
+        return False
+    return name == "门" or name.endswith("门") or any(w in low for w in DOOR_WORDS)
+
+
+def door_high(shapes) -> dict | None:
+    """配方里认得出的入户门（name 是「入户门 / 大门 / …门 / door」，高 1.6 到 4.5 米）-> {"low": 门底边离地, "up": 比地面或它下面最高的台阶顶高多少}；
+    认不出门 -> None（不查）。照摆好以后的真位置量（转过的、use 套的都算），和 door_height.py（岛上照配方的 pos 读）一样的说法。"""
+    doors, steps = [], []
+    for s in shapes or []:
+        nm = _shape_name(s)
+        if not nm:
+            continue
+        V = placed(s)
+        y0, y1 = min(p[1] for p in V), max(p[1] for p in V)
+        if any(w in nm.lower() for w in STEP_WORDS):
+            steps.append(y1)
+        elif _is_door(nm) and DOOR_TALL[0] <= y1 - y0 <= DOOR_TALL[1]:
+            doors.append(y0)
+    if not doors:
+        return None
+    low = min(doors)
+    ref = max([0.0] + [t for t in steps if t <= low + 0.01])
+    return {"low": round(low, 2), "up": round(low - ref, 2)}
+
+
+def door_high_words(high) -> str | None:
+    """{"low", "up"} -> 「门离地 4.25 米，挪到一楼」（门在楼上）| None。插件交楼时带上来，岛上照这一句退。"""
+    if not isinstance(high, dict) or not _finite(high.get("up")) or not _finite(high.get("low")) or high["up"] <= DOOR_UP_MAX:
+        return None
+    return "门离地 %.2f 米，挪到一楼" % float(high["low"])
+
+
 def _named(labels) -> str:
     """伸出去的那几个 -> 「（第 7 个：sphere、第 2 个：box）」，最多说 3 个；没有 -> ""。"""
     if not labels:
@@ -2680,6 +2816,8 @@ def run_inside(a) -> dict:
         est = sum(tris_of(s) for s in ins["shapes"])
         if est > limits["tris"] * 4:
             raise Fail("太重了：大约 %d 个面，一层最多 %d" % (est, limits["tris"]))
+        fx0, fz0, fx1, fz1 = room["foot"]
+        notes += nudge_in(ins["shapes"], (fx0 + WALL_T, fz0 + WALL_T, fx1 - WALL_T, fz1 - WALL_T))
         rc, fc, pc = (bpy.data.collections.new(n) for n in ("room", "furniture", "points"))
         for c in (rc, fc, pc):
             sc.collection.children.link(c)
@@ -2779,6 +2917,9 @@ def run(a) -> dict:
         est = sum(tris_of(s) for s in shapes)
         if est > limits["tris"] * 4:
             raise Fail("太重了：大约 %d 个面，最多 %d" % (est, limits["tris"]))
+        if lot and not lot.get("poly_uv"):                   # (多边形的地照旧：斜边上推哪边说不清)
+            hw, hd = lot["w"] / 2, lot["d"] / 2
+            notes += nudge_in(shapes, (-hw, -hd, hw, hd), whole=True, wall="地界")
         coll = bpy.data.collections.new("house")
         sc.collection.children.link(coll)
         for k, s in enumerate(shapes):
@@ -2826,6 +2967,12 @@ def run(a) -> dict:
         num["blend_kb"] = max(1, int(math.ceil(os.path.getsize(a.out_blend) / 1024)))
     files = {"glb": os.path.abspath(a.out_glb), "blend": os.path.abspath(a.out_blend) if a.out_blend else None, "previews": []}
     P = problems_of(num, lot, limits, parts_named)
+    if mode == "recipe":                                     # 门在楼上（11-26）：判问题；量出来的数带回去，插件交楼时岛上照它退
+        high = door_high(shapes)
+        if high is not None:
+            num["door_high"] = high
+            if door_high_words(high):
+                P.append(door_high_words(high))
     if mode == "recipe" and door_raw is not None:            # 门（11-23）：写了就带回去，岛上照它开门；不写岛上照朝着最近的路的那一面开
         why, door = read_door(door_raw, num["bbox"])
         P += why

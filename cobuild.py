@@ -41,8 +41,9 @@ from .town_client import TownError
 HERE = Path(__file__).resolve().parent
 SCRIPT_FILE = HERE / 'cobuild_scripts' / 'recipe_to_blend.py'
 LAYER_FILE = HERE / 'cobuild_scripts' / 'owner_layer.py'
-# 小镇 tools/cobuild/recipe_to_blend.py（11-26 配方第 2 版：倒角、旋转体、扫掠、软垫、图案、自己的图、defs + use）的 sha256：插件原样带着，测试查一字不差
-SCRIPT_SHA256 = 'a4cad6c8e460cac43b3f8a4a9ea3ff1ed750c1aeef1355e423f533c9b9f71687'
+# 小镇 tools/cobuild/recipe_to_blend.py（11-26 配方第 2 版：倒角、旋转体、扫掠、软垫、图案、自己的图、defs + use；
+# 0.4.15 换成 11-26 包那一份：量入户门离地多高 numbers.door_high、门在楼上判问题，伸出墙 / 地界 0.3 米以内的推回去）的 sha256：插件原样带着，测试查一字不差
+SCRIPT_SHA256 = '14048ebd6c210280ff77fce03f87e132cab09106bdd0c4cc77c60a25cd9d9fe8'
 IMAGES_DIR = 'images'          # 草稿里放她自己的图（主人传的、她生成的）的文件夹：配方的 image 按文件名从这里找（--images）
 MIN_BLENDER = (4, 2)
 BLENDER_URL = 'https://www.blender.org/download/'
@@ -1213,8 +1214,10 @@ class Cobuild:
             if ok.get('why'):
                 return self._out(ok['why'])
             door = (v.get('numbers') or {}).get('door')          # 0.4.9：配方里的正门一起交（岛上再查门外走不走得到）
+            high = (v.get('numbers') or {}).get('door_high')     # 0.4.15：建造脚本量的门离地多高一起交，门在楼上岛上照它退；这一版没量出门交 {}（岛上不提醒升级）
             try:
                 r = await c.isle_build(d['lot'], d.get('idea') or '', ok['words'], glb.read_bytes(), door=door if isinstance(door, dict) else None,
+                                       door_high=high if isinstance(high, dict) else {},
                                        **({'addnew': True, 'at': d.get('at')} if d.get('addnew') is True else {}))   # 一块地几栋：再盖一栋带 new / at
             except TownError as error:
                 return self._out(self._town_fail(error, '交楼'))

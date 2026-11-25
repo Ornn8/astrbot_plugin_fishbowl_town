@@ -87,7 +87,8 @@ class FakeBlender:
             Path(arg(a, '--out-blend')).write_text('BLEND ' + text, 'utf-8')
             Path(arg(a, '--out-glb')).write_text('GLB ' + text, 'utf-8')
             self.previews(arg(a, '--previews'))
-            n = {**self.numbers(text), 'shapes': len(json.loads(text)['shapes']), **({'door': json.loads(text)['door']} if 'door' in json.loads(text) else {})}
+            n = {**self.numbers(text), 'shapes': len(json.loads(text)['shapes']), **({'door': json.loads(text)['door']} if 'door' in json.loads(text) else {}),
+                 **({'door_high': {'low': 0.3, 'up': 0.0}} if '入户门' in text else {})}
             return {'ok': True, 'result': {'cobuild': 1, 'ok': True, 'numbers': n, 'problems': [f"高 {n['h']} 米，这块地最多 300 米"] if n['h'] > 300 else [], 'notes': [], 'secs': 1.2}, 'why': []}
         if a[0] == '--from-blend':
             text = Path(a[1]).read_text('utf-8')
@@ -116,13 +117,15 @@ class FakeTown:
         self.sent = []
         self.answers = list(confirm or [{'ok': True, 'paid_coin': 120, 'upkeep_day_coin': 2, 'text': '楼上岛了'}])
         self.inside = []                                     # isle/interiors 回的（测试里改）
+        self.door_highs = []
 
     async def isle_build_guide(self, lot):
         self.sent.append(('guide', lot))
         return {'ok': True, 'lot': lot, 'lot_name': '海边小屋地', 'text': '【建模说明】形状清单……', 'limits': LOT_JSON['limits'], 'lot_json': LOT_JSON}
 
-    async def isle_build(self, lot, idea, owner_words, glb, door=None):
+    async def isle_build(self, lot, idea, owner_words, glb, door=None, door_high=None):
         self.sent.append(('build', {'lot': lot, 'idea': idea, 'owner_words': owner_words, 'glb': glb, 'door': door}))
+        self.door_highs.append(door_high)                    # 0.4.15 交楼带的门离地多高
         return {'ok': True, 'build_id': 'b-1', 'quote': {'coin': 120, 'upkeep_day_coin': 2, 'lines': ['占地 24 平方米']}}
 
     async def isle_build_confirm(self, body):
@@ -192,9 +195,9 @@ def setup(tmp_path, found=FOUND, town=None, owner=OWNER):
 def test_vendored_scripts_are_the_islands_byte_for_byte_and_never_eval():
     assert hashlib.sha256(C.SCRIPT_FILE.read_bytes()).hexdigest() == C.SCRIPT_SHA256
     assert b'\r\n' not in C.SCRIPT_FILE.read_bytes() and b'\r\n' not in C.LAYER_FILE.read_bytes()
-    # 0.4.13 和小镇 feat/1126-recipe-detail（配方第 2 版）那一份一样；那个工作区不在就不比（插件在仓库根下或套一层都找得到）
+    # 0.4.15 和小镇 11-26 包（feat/1126-pack2：门离地多高、0.3 米推回去）那一份一样；那个工作区不在就不比（插件在仓库根下或套一层都找得到）
     for top in (ROOT.parent, ROOT.parent.parent):
-        server = top / 'wt-1126-recipe' / 'ops' / 'revenue-20261022' / 'fishbowl-town' / 'tools' / 'cobuild' / 'recipe_to_blend.py'
+        server = top / 'wt-1126-draft-receipts' / 'ops' / 'revenue-20261022' / 'fishbowl-town' / 'tools' / 'cobuild' / 'recipe_to_blend.py'
         if server.exists():
             assert hashlib.sha256(server.read_bytes()).hexdigest() == C.SCRIPT_SHA256, 'same as the server copy'
     dsh = ROOT.parent / 'wt-dsh-cobuild' / 'lib' / 'cobuild' / 'owner_layer.py'
@@ -453,7 +456,7 @@ def test_one_plot_several_buildings_start_new_is_its_own_draft_handed_in_with_ne
               {'ok': True, 'build_id': 'b-re', 'new': False,
                'quote': {'coin': 90, 'upkeep_day_coin': 2, 'new': False, 'rebuild': True, 'lines': ['这块地上已经有楼：起步按重建费 62.5 鲸币算', '这是重建 L-0107：换掉原来那栋，不是再盖一栋']}}]
 
-    async def isle_build(lot, idea, owner_words, glb, door=None, addnew=False, at=None):
+    async def isle_build(lot, idea, owner_words, glb, door=None, addnew=False, at=None, door_high=None):
         town.sent.append(('build', {'lot': lot, 'addnew': addnew, 'at': at}))
         return quotes.pop(0)
     town.isle_build = isle_build
@@ -495,7 +498,11 @@ def test_one_plot_several_buildings_start_new_is_its_own_draft_handed_in_with_ne
     run(c.isle_build('L-0107', '', '交吧', b'glTF', addnew=True, at={'x': 7.5, 'z': -6}))
     assert fields()['new'] == 'true' and json.loads(fields()['at']) == {'x': 7.5, 'z': -6}
     run(c.isle_build('L-0107', '', '交吧', b'glTF', at={'x': 1}))
-    assert 'new' not in fields() and 'at' not in fields()
+    assert 'new' not in fields() and 'at' not in fields() and 'door_high' not in fields()
+    run(c.isle_build('L-0107', '', '交吧', b'glTF', door_high={'low': 4.25, 'up': 3, 'x': 1, 'side': 'front'}))   # 0.4.15 门离地多高：只留 low / up
+    assert json.loads(fields()['door_high']) == {'low': 4.25, 'up': 3}
+    run(c.isle_build('L-0107', '', '交吧', b'glTF', door_high={}))
+    assert fields()['door_high'] == '{}'
 
 
 def test_the_quote_lines_all_reach_her_faces_file_and_daily_upkeep_come_last(tmp_path):
@@ -504,7 +511,7 @@ def test_the_quote_lines_all_reach_her_faces_file_and_daily_upkeep_come_last(tmp
              '每天物业 72.5 鲸币（起步 2.5；文件超出起步的每 MB 每天 20、面数超出起步的每一万面每天 10）']
     town = FakeTown()
 
-    async def isle_build(lot, idea, owner_words, glb, door=None):
+    async def isle_build(lot, idea, owner_words, glb, door=None, door_high=None):
         town.sent.append(('build', {'lot': lot}))
         return {'ok': True, 'build_id': 'b-9', 'quote': {'coin': 3887.5, 'upkeep_day_coin': 72.5, 'lines': lines}}
     town.isle_build = isle_build
@@ -766,3 +773,21 @@ def test_real_blender_recipe_previews_his_chimney_kept_on_her_new_recipe(tmp_pat
         assert next(x[1] for x in town.sent if x[0] == 'build')['glb'][:4] == b'glTF'
 
     run(flow())
+
+
+def test_the_hand_in_carries_the_door_height_the_build_script_measured_and_sends_empty_when_no_door_was_found(tmp_path):
+    """0.4.15（协调 11-25）：交楼带建造脚本量的 numbers.door_high，门在楼上岛上照它退；这一版没量出门交 {}，岛上分得出是新插件、不提醒升级。"""
+    for recipe, want in (({'shapes': RECIPE['shapes'] + [{'type': 'box', 'pos': [0, 0.3, 2], 'size': [1, 2.1, 0.1], 'name': '入户门'}]}, {'low': 0.3, 'up': 0.0}),
+                         (RECIPE, {})):
+        town, here = FakeTown(), tmp_path / ('a' if want else 'b')
+        here.mkdir()
+        cb, *_ = setup(here, town=town)
+
+        async def flow():
+            cb.observe_owner(OWNER, '我们盖个房子吧')
+            await cb.start('L-0107', '小木屋')
+            await cb.make(recipe)
+            cb.observe_owner(OWNER, '交吧')
+            assert '交上去了' in (await cb.submit(OWNER))['text']
+        run(flow())
+        assert town.door_highs == [want]

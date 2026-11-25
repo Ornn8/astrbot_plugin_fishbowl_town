@@ -279,7 +279,8 @@ class TownClient:
         """这块地的建模说明 + 上限 + 给 recipe_to_blend.py 的 lot.json。→ {ok, lot, lot_name, text, limits, types, materials, lot_json}。"""
         return await self.request('GET', 'isle/build_guide', query={'lot': lot}, timeout=15)
 
-    async def isle_build(self, lot: str, idea: str, owner_words: str, glb: bytes, door: dict | None = None, addnew: bool = False, at: dict | None = None):
+    async def isle_build(self, lot: str, idea: str, owner_words: str, glb: bytes, door: dict | None = None, addnew: bool = False, at: dict | None = None,
+                         door_high: dict | None = None):
         """交主人点头的 glb（multipart：lot、idea、owner_words、file；0.4.9 起带配方里的正门 door），岛上当场报价。→ {ok, build_id, quote{coin, upkeep_day_coin, lines…}, …}。"""
         form = [('lot', str(lot), None, None), ('idea', str(idea or ''), None, None), ('owner_words', str(owner_words or ''), None, None)]
         if isinstance(door, dict) and isinstance(door.get('side'), str):
@@ -288,6 +289,9 @@ class TownClient:
             except (TypeError, ValueError):
                 at = 0.0
             form.append(('door', json.dumps({'side': door['side'], 'at': at}, ensure_ascii=False), None, None))
+        if isinstance(door_high, dict):                              # 0.4.15：门离地多高 {low, up}（recipe_to_blend.py 量的；量了没认出门是 {}），岛上门在楼上就退
+            form.append(('door_high', json.dumps({k: door_high[k] for k in ('low', 'up')
+                                                  if isinstance(door_high.get(k), (int, float)) and not isinstance(door_high.get(k), bool)}), None, None))
         if addnew:                                                   # 一块地几栋（小镇 11-25）：new = 在这块地上再盖一栋（不写是重建原来那栋）
             form.append(('new', 'true', None, None))
             if isinstance(at, dict) and at:                          # at = 放在哪 {x, z 米（地块正中 0,0），ry 度}；不写岛上放空地上
