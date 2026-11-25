@@ -1238,10 +1238,11 @@ def _call(items) -> str:
     return first + "形状" if first.endswith("个") else first
 
 
-def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wall: str = "墙") -> list:
+def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wall: str = "墙", edge=None) -> list:
     """伸出 box [x0, z0, x1, z1]（屋里、或者长方形的地）cap 米以内的，推回去贴着边放（原地改 shapes）-> 推了什么的几句（记进 notes）。
     一件一件推：配方的一个形状算一件（use 套出来的椅子、repeat 摆的一排整件一起挪，不拆开）。``whole``（楼）：整栋先一起挪，
-    整栋挪得进去就只挪整栋（不走样）；挪不进去再一件一件推。伸出超过 cap 的、比屋子还宽的不动：照旧判问题。"""
+    整栋挪得进去就只挪整栋（不走样）；挪不进去再一件一件推。伸出超过 cap 的、比屋子还宽的不动：照旧判问题。
+    ``edge``（地界要留的边，米）：box 是扣掉留边以后能盖的范围，说法换成「离地界留够了边」。"""
     if not shapes:
         return []
     x0, z0, x1, z1 = box
@@ -1253,6 +1254,8 @@ def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wal
                 return []
             for s in shapes:
                 _move(s, dx, dz)
+            if edge:
+                return ["整栋往里挪了 %s 米，离地界留够了 %s 米的边" % (_far(dx, dz), _m(edge))]
             return ["整栋伸出%s %s 米，整栋往里挪了贴着%s放" % (wall, _far(dx, dz), wall)]
     groups: dict = {}
     for k, s in enumerate(shapes):
@@ -1265,10 +1268,12 @@ def nudge_in(shapes: list, box, cap: float = NUDGE_MAX, whole: bool = False, wal
             continue
         for s in items:
             _move(s, dx, dz)
-        said.append("%s伸出%s %s 米" % (_call(items), wall, _far(dx, dz)))
+        said.append(("%s差 %s 米" if edge else "%s伸出" + wall + " %s 米") % (_call(items), _far(dx, dz)))
     if not said:
         return []
     more = " 等 %d 件" % len(said) if len(said) > 3 else ""
+    if edge:
+        return ["、".join(said[:3]) + more + "：离地界不够 %s 米，推回来留够了边" % _m(edge)]
     return ["、".join(said[:3]) + more + "：推回%s里贴着%s放了" % ("屋" if wall == "墙" else "地界", wall)]
 
 
@@ -1329,6 +1334,122 @@ def _named(labels) -> str:
     return "（%s%s）" % ("、".join(labels[:3]), " 等 %d 个" % len(labels) if len(labels) > 3 else "")
 
 
+# --- 离地界留的边（主人 11-25「定0.5米」）：新交的楼左右和后面离地界各留 0.5 米，朝路那面不限 -------------------------------------
+# 岛上照朝路的那一面算好写进 lot.json 的 "keep"（{"left": 0.5, "right": 0.5, "back": 0.5}，朝路那面不写），这里照它查、照它推；
+# 没写 keep 的（老岛）照旧只查出没出地界。岛上 buildings.check_numbers 用的是同一个 keep_problems（话一字不差）。
+EDGE_SIDES = ("left", "right", "back", "front")
+EDGE_ZH = {"left": "左边", "right": "右边", "back": "后边", "front": "门口那边"}
+EDGE_TO = {"left": "往右", "right": "往左", "back": "往门口那边", "front": "往后"}
+
+
+def _m(v: float) -> str:
+    return ("%.2f" % v).rstrip("0").rstrip(".")
+
+
+def _up(v: float) -> float:
+    """往上取到厘米（挪多少、收多少：取整以后一定够）。"""
+    return math.ceil(round(v * 100, 6)) / 100
+
+
+def read_keep(lot) -> dict:
+    """lot.json 的 "keep" -> {面: 至少留几米}（0、没写的面不留）。看不懂、没写 -> {}：不查留边。"""
+    k = lot.get("keep") if isinstance(lot, dict) else None
+    if not isinstance(k, dict):
+        return {}
+    return {s: float(k[s]) for s in EDGE_SIDES if _finite(k.get(s)) and 0 < float(k[s]) <= 5}
+
+
+def keep_box(lot):
+    """长方形的地扣掉要留的边以后能盖的范围 (x0, z0, x1, z1)；多边形的地、没留边 -> None。"""
+    keep = read_keep(lot)
+    if not keep or lot.get("poly_uv"):
+        return None
+    hw, hd = float(lot["w"]) / 2, float(lot["d"]) / 2
+    return (-hw + keep.get("left", 0.0), -hd + keep.get("back", 0.0), hw - keep.get("right", 0.0), hd - keep.get("front", 0.0))
+
+
+def _edge_gaps(bbox, w: float, d: float) -> dict:
+    x0, z0, x1, z1 = bbox
+    return {"left": x0 + w / 2, "right": w / 2 - x1, "back": z0 + d / 2, "front": d / 2 - z1}
+
+
+def _poly_gaps(P, F) -> list:
+    """多边形的地 P、楼的外轮廓 F（地块自己的坐标）-> [(那条地界线朝哪面, 楼离它多远)]：每条地界线照它往外的方向算是哪一面。"""
+    n = len(P)
+    area2 = sum(P[k][0] * P[(k + 1) % n][1] - P[(k + 1) % n][0] * P[k][1] for k in range(n))
+    EF = [(F[k], F[(k + 1) % len(F)]) for k in range(len(F))]
+    out = []
+    for k in range(n):
+        a, b = P[k], P[(k + 1) % n]
+        du, dv = b[0] - a[0], b[1] - a[1]
+        nu, nv = (dv, -du) if area2 > 0 else (-dv, du)
+        side = ("right" if nu > 0 else "left") if abs(nu) >= abs(nv) else ("front" if nv > 0 else "back")
+        g = min([_dist_seg(p, a, b) for p in F] + [_dist_seg(q, c, e) for q in (a, b) for c, e in EF])
+        out.append((side, g))
+    return out
+
+
+def keep_problems(num: dict, lot, parts=None, head: str = "") -> list:
+    """离地界不够要留的边 -> 「左边离地界只有 0.06 米，至少留 0.5 米：宽改到 6.8 米以内」（出了地界的：「左边伸出地界 0.2 米，至少留 0.5 米：…」）；
+    宽 / 深在能盖的范围以内、只是偏了 -> 「…：往右挪 0.44 米」。多边形的地照外轮廓（没有就外接框）离每条要留边的地界线多远：「…：往里收 0.3 米」。
+    ``parts`` 同 problems_of（后面说是哪几个形状）；``head`` 加在每句前面（「放的位置」）。没写 keep -> []。"""
+    keep = read_keep(lot)
+    if not keep:
+        return []
+    P = []
+    if lot.get("poly_uv"):
+        foot = _foot_ok(num)
+        if foot is None:
+            x0, z0, x1, z1 = num["bbox"]
+            foot = [(x0, z0), (x1, z0), (x1, z1), (x0, z1)]
+        worst = {}
+        for side, g in _poly_gaps([tuple(p) for p in lot["poly_uv"]], foot):
+            k = keep.get(side, 0.0)
+            if k and g < k - EDGE_EPS and (side not in worst or g < worst[side]):
+                worst[side] = g
+        for side in EDGE_SIDES:
+            if side in worst:
+                g = worst[side]
+                P.append("%s%s离地界只有 %s 米，至少留 %s 米：往里收 %s 米" % (head, EDGE_ZH[side], _m(max(g, 0.0)), _m(keep[side]), _m(_up(keep[side] - g))))
+        return P
+    w, d = float(lot["w"]), float(lot["d"])
+    bbox = num["bbox"]
+    gaps = _edge_gaps(bbox, w, d)
+    said = set()
+    for side in EDGE_SIDES:
+        k, g = keep.get(side, 0.0), gaps[side]
+        if not k or g >= k - EDGE_EPS:
+            continue
+        if side in ("left", "right"):
+            span, room, word, axis = bbox[2] - bbox[0], w - keep.get("left", 0.0) - keep.get("right", 0.0), "宽", "x"
+        else:
+            span, room, word, axis = bbox[3] - bbox[1], d - keep.get("back", 0.0) - keep.get("front", 0.0), "深", "z"
+        start = "%s伸出地界 %.1f 米" % (EDGE_ZH[side], -g) if g < -EDGE_EPS else "%s离地界只有 %s 米" % (EDGE_ZH[side], _m(max(g, 0.0)))
+        if span > room + EDGE_EPS:
+            tail = "" if axis in said else "：%s改到 %s 米以内" % (word, _m(room))
+            said.add(axis)
+        else:
+            tail = "：%s挪 %s 米" % (EDGE_TO[side], _m(_up(k - g)))
+        names = ""
+        if parts:
+            bad = sorted(((_edge_gaps(pt[1], w, d)[side], j, pt[0]) for j, pt in enumerate(parts)), key=lambda x: (x[0], x[1]))
+            names = _named([nm for gg, _j, nm in bad if gg < k - EDGE_EPS])
+        P.append(head + start + "，至少留 %s 米" % _m(k) + tail + names)
+    return P
+
+
+def keep_words(lot) -> str:
+    """「能盖的范围：左右 6.8 米、前后 14.5 米（已扣掉 0.5 米的边）」；多边形的地「能盖的范围：地界往里留 0.5 米的边（朝路那面不用）」；没留边 -> ""。"""
+    keep = read_keep(lot)
+    if not keep:
+        return ""
+    m = _m(max(keep.values()))
+    if lot.get("poly_uv"):
+        return "能盖的范围：地界往里留 %s 米的边（朝路那面不用）" % m
+    x0, z0, x1, z1 = keep_box(lot)
+    return "能盖的范围：左右 %s 米、前后 %s 米（已扣掉 %s 米的边）" % (_m(x1 - x0), _m(z1 - z0), m)
+
+
 def tex_problems(tex, limits: dict, per: str = "") -> list:
     """贴图（11-26 起按总像素）：几张加起来的像素、一张的最长边、张数（防坏文件的技术线）。"""
     P = []
@@ -1356,14 +1477,20 @@ def problems_of(num: dict, lot, limits: dict, parts=None) -> list:
         elif not rect_in(poly, x0, z0, x1, z1):
             out = [pt[0] for pt in parts or [] if not rect_in(poly, *pt[1])]
             P.append("楼的占地（%.1f × %.1f 米）伸出地界：要整个落在这块地的边界里面%s" % (x1 - x0, z1 - z0, _named(out)))
+        if not P:                                            # 落在地界里了，再看要留的边（主人 11-25 定 0.5 米）
+            P += keep_problems(num, lot, parts)
     elif lot:
         hw, hd = float(lot["w"]) / 2, float(lot["d"]) / 2
-        for side, over_of in (("左边", lambda b: -hw - b[0]), ("右边", lambda b: b[2] - hw), ("后边", lambda b: -hd - b[1]),
-                              ("门口那边", lambda b: b[3] - hd)):
+        keep = read_keep(lot)
+        for side, key, over_of in (("左边", "left", lambda b: -hw - b[0]), ("右边", "right", lambda b: b[2] - hw), ("后边", "back", lambda b: -hd - b[1]),
+                                   ("门口那边", "front", lambda b: b[3] - hd)):
+            if keep.get(key):
+                continue                                     # 要留边的那几面：下面 keep_problems 一起说（出了地界也在那一句里）
             over = over_of(num["bbox"])
             if over > EDGE_EPS:
                 out = sorted(((over_of(pt[1]), k, pt[0]) for k, pt in enumerate(parts or [])), key=lambda x: (-x[0], x[1]))
                 P.append("%s伸出地界 %.1f 米%s" % (side, over, _named([name for o, _k, name in out if o > EDGE_EPS])))
+        P += keep_problems(num, lot, parts)
     if num["tris"] > limits["tris"]:
         P.append("%d 个面，最多 %d（页面跑不动的线，不卖）" % (num["tris"], limits["tris"]))
     if num.get("kb", 0) > limits["kb"]:
@@ -1400,7 +1527,11 @@ def read_lot(path):
     poly = lot.get("poly_uv")
     if poly is not None and not (isinstance(poly, list) and len(poly) >= 3 and all(isinstance(p, (list, tuple)) and len(p) == 2 and all(_finite(q) for q in p) for p in poly)):
         raise ValueError("lot.json 的 poly_uv 要是至少三个 [x, z]")
-    return {"w": float(lot["w"]), "d": float(lot["d"]), "poly_uv": [[float(a), float(b)] for a, b in poly] if poly else None}, limits
+    out = {"w": float(lot["w"]), "d": float(lot["d"]), "poly_uv": [[float(a), float(b)] for a, b in poly] if poly else None}
+    keep = read_keep(lot)                                    # 离地界要留的边（11-26 的岛才写）
+    if keep:
+        out["keep"] = keep
+    return out, limits
 
 
 # --- the front door (11-23): which side of the house, how far from that side's middle ------------------------------------------------
@@ -2919,7 +3050,8 @@ def run(a) -> dict:
             raise Fail("太重了：大约 %d 个面，最多 %d" % (est, limits["tris"]))
         if lot and not lot.get("poly_uv"):                   # (多边形的地照旧：斜边上推哪边说不清)
             hw, hd = lot["w"] / 2, lot["d"] / 2
-            notes += nudge_in(shapes, (-hw, -hd, hw, hd), whole=True, wall="地界")
+            kb = keep_box(lot)                               # 要留边的：推进能盖的范围（主人 11-25 定 0.5 米），推完还不够的照样判问题
+            notes += nudge_in(shapes, kb or (-hw, -hd, hw, hd), whole=True, wall="地界", edge=max(read_keep(lot).values()) if kb else None)
         coll = bpy.data.collections.new("house")
         sc.collection.children.link(coll)
         for k, s in enumerate(shapes):
