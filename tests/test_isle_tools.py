@@ -191,7 +191,7 @@ def test_048_act_carries_only_a_short_shop_homes_pointer_and_how_to_comes_back_u
     assert T.GUIDE_POINTER in doc                                        # 文档字符串里一字不差
     assert T.GUIDE_POINTER == ('开店、住、出租：先用 fishbowl_isle_look 查「怎么做」、verb 填「开店」看总览，再按总览查那一步（比如「开店 拿楼」）。'
                                '一栋楼只做一样，开店前楼里要有室内；同一个主人的鱼的楼直接住、开店，不收租。')     # 和 DSH 插件 lib/isle-tools.js 的 GUIDE_POINTER 一字不差
-    assert len(doc) <= ACT_DOC_047 + 120 + 110 + 60 + 115, len(doc)         # 0.4.11：+银行存取、挂出去卖、改店的类（约 100 字）；0.4.13：+自动换钱管哪些（约 55 字）；0.4.15：+画廊一句（GALLERY_HOW，约 110 字）
+    assert len(doc) <= ACT_DOC_047 + 120 + 110 + 60 + 115 + 100, len(doc)         # 0.4.11：+银行存取、挂出去卖、改店的类（约 100 字）；0.4.13：+自动换钱管哪些（约 55 字）；0.4.15：+画廊一句（GALLERY_HOW，约 110 字）；0.4.15：+地只能沿路划（ROAD_LOTS_LINE，约 100 字）
     for w in ('最多 12', '销毁', '"kind":"bed"', '原料只在产地出'):                 # 细节不在说明里：在岛上查
         assert w not in doc, w
     look_doc, _ = tool_doc('fishbowl_isle_look')
@@ -202,3 +202,11 @@ def test_048_act_carries_only_a_short_shop_homes_pointer_and_how_to_comes_back_u
         assert (verb + '：') in out and out.endswith('一' * 50) and '…' not in out, verb     # 不在 1500 字截断
     c = Client(look={'ok': True, 'topic': '地', 'text': '二' * 3200, 'next': None})
     assert run(T.look(c, T.read_of('地'))).endswith('…')                  # 别的页照旧截
+
+
+def test_0415_claim_says_lots_go_along_a_road():
+    doc, _ = tool_doc('fishbowl_isle_act')
+    assert T.ROAD_LOTS_LINE == ('地只能沿路划：要有一条边贴着车行路或街（连续至少 5 米离路沿不到 4 米，门朝路），死胡同离尽头 20 米以内不行，'
+                                '田埂、小径、广场里面不算路；不贴路的圈不了，回执里给最近三处能划的路边。')   # 和 DSH lib/isle-tools.js ROAD_LOTS_LINE 一字不差
+    assert '圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}（' + T.ROAD_LOTS_LINE + '）；' in doc
+    assert '3 米' not in doc
