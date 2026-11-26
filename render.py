@@ -29,6 +29,14 @@ def _when(ts) -> str:
         return ''
 
 
+def album_by(it) -> str:
+    """0.4.15 拍照店家（小镇 feat/1126-photo-studio）：店家拍的照片下面那一句（「由「暖光照相馆」拍」），小镇给的原话，不改字；别的照片 ''。"""
+    if not isinstance(it, dict):
+        return ''
+    by = it.get('by') if isinstance(it.get('by'), str) else (it['studio'].get('by') if isinstance(it.get('studio'), dict) and isinstance(it['studio'].get('by'), str) else '')
+    return by.strip()[:40]
+
+
 def album(a: dict | None, name: str = '她') -> str:
     items, making, back = _arr((a or {}).get('items')), _arr((a or {}).get('making')), _arr((a or {}).get('given_back'))
     if not items and not making and not back:
@@ -39,6 +47,9 @@ def album(a: dict | None, name: str = '她') -> str:
         who = '、'.join(x for x in (_nm(w) for w in _arr(it.get('with'))) if x)
         paid = f"{_nm(it['paid_by'])}请的" if it.get('paid_by') else ''
         out.append(f"- [{kind}] {_str(it.get('what'), 60)}{'｜和' + who if who else ''}{'｜' + str(it['occasion']) if it.get('occasion') else ''}{'｜' + paid if paid else ''}")
+        by = album_by(it)
+        if by:
+            out.append(f'  {by}')
     if len(items) > 12:
         out.append(f'……还有 {len(items) - 12} 项。')
     out += [f"- 正在做：{_str(m.get('what'), 50)}" for m in making[:5]]
