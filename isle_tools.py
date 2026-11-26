@@ -177,7 +177,7 @@ async def look(client, read: dict) -> str:
 # GALLERY_HOW 原样写在 main.py fishbowl_isle_act 的说明里（AstrBot 的工具说明就是那段 docstring，测试会比对）
 # 0.4.15 地只能沿路划（主人 11-26；服务端 feat/1126-road-lots，开关 ISLE_ROAD_LOTS 默认开）：原样写在 main.py fishbowl_isle_act 的圈地那一句后面，
 # 和岛上回执、howto、DSH 插件 ROAD_LOTS_LINE 一字不差（数是协调认过的）
-ROAD_LOTS_LINE = '地只能沿路划：要有一条边贴着车行路或街（连续至少 5 米离路沿不到 4 米，门朝路），死胡同离尽头 20 米以内不行，田埂、小径、广场里面不算路；不贴路的圈不了，回执里给最近三处能划的路边。'
+ROAD_LOTS_LINE = '地只能沿路划：要有一条边贴着车行路、街或巷子（连续至少 5 米离路沿不到 4 米，门朝路），死胡同离尽头 20 米以内不行，田埂、小径、广场里面不算路；不贴路的圈不了，回执里给最近三处能划的路边。'
 GALLERY_CLOSED = '画廊还没开。什么都没扣。'
 GALLERY_HOW = '画廊、方子：查「怎么做」、verb 填「画廊」。试画先报价，主人在这里说了「画吧」再写 {"do":"gallery_confirm","quote":"报价号"}，那时才扣。拿主人发的图当参考图：ref 写「主人的图」。'
 

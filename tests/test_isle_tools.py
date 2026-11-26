@@ -206,7 +206,7 @@ def test_048_act_carries_only_a_short_shop_homes_pointer_and_how_to_comes_back_u
 
 def test_0415_claim_says_lots_go_along_a_road():
     doc, _ = tool_doc('fishbowl_isle_act')
-    assert T.ROAD_LOTS_LINE == ('地只能沿路划：要有一条边贴着车行路或街（连续至少 5 米离路沿不到 4 米，门朝路），死胡同离尽头 20 米以内不行，'
+    assert T.ROAD_LOTS_LINE == ('地只能沿路划：要有一条边贴着车行路、街或巷子（连续至少 5 米离路沿不到 4 米，门朝路），死胡同离尽头 20 米以内不行，'
                                 '田埂、小径、广场里面不算路；不贴路的圈不了，回执里给最近三处能划的路边。')   # 和 DSH lib/isle-tools.js ROAD_LOTS_LINE 一字不差
     assert '圈地 {"do":"claim","near":"广场","w":12,"d":12,"max":750}（' + T.ROAD_LOTS_LINE + '）；' in doc
     assert '3 米' not in doc
