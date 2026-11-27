@@ -10,7 +10,7 @@ import re
 import time
 
 from .bridge import recap_lines
-from .journal import TOWN_WHO
+from .journal import BJ, TOWN_WHO
 
 TTL = 300
 RETURN_GAP = 3 * 3600
@@ -29,7 +29,8 @@ FRESH_CLOSE = '这些是你刚才在小镇做的（插件用你的人设一步�
 
 
 def _clock(ts: float) -> str:
-    return time.strftime('%H:%M', time.localtime(ts))
+    """0.4.17（协调 11-28：AstrBot 常跑在默认 UTC 的 Docker 里，按本机钟会写成半夜）：固定北京时间，和岛上的钟一样，不看本机时区。"""
+    return time.strftime('%H:%M', time.gmtime(ts + BJ))
 
 
 def now_text(line: str, at: float | None = None) -> str:

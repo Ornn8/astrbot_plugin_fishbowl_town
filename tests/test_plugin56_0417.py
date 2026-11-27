@@ -1,6 +1,7 @@
 """0.4.17（#56 汐、灯 11-27；和 DSH 0.9.21 test/plugin56-0921.test.mjs 同一套用例）：她看到的工具名和这一版真注册的一致；
 「你现在」带时间；每个失败带 code；回执写是哪条鱼；代写看得见。"""
 import asyncio
+import calendar
 import json
 import re
 import sys
@@ -115,7 +116,9 @@ def test_receipt_helpers_match_dsh():
 
 
 def test_the_note_says_when_where_she_is_was_true():
-    at = time.mktime((2026, 11, 27, 13, 1, 0, 0, 0, -1))
+    at = calendar.timegm((2026, 11, 27, 13, 1, 0)) - 8 * 3600   # 北京 13:01
+    # 协调 11-28：固定北京时间，不看本机时区（Docker 默认 UTC 时按本机钟会写成「截至 05:01」）
+    assert N.now_text('在家', 1795822500) == '- 你现在（截至 07:35）：在家'   # 2026-11-27 23:35 UTC = 北京 11-28 07:35
     assert '\n- 你现在（截至 13:01）：在电玩城' in N.render_block({}, now_line='在电玩城', now_at=at)
     assert N.render_fresh([], '在码头', now_at=at).endswith('\n- 你现在（截至 13:01）：在码头')
     assert '\n- 你现在：在码头' in N.render_block({}, now_line='在码头')
@@ -148,7 +151,7 @@ def test_the_note_says_when_where_she_is_was_true():
     async def plain():
         return '在码头'
     note2 = N.TownNote(fetch_bonds=fetch_bonds, fetch_now=plain, journal=J(), now=lambda: t[0], recap=lambda: False)
-    assert f"- 你现在（截至 {time.strftime('%H:%M', time.localtime(t[0]))}）：在码头" in run(note2.for_turn('k')), 'a plain line: when the plugin read it'
+    assert f"- 你现在（截至 {time.strftime('%H:%M', time.gmtime(t[0] + 8 * 3600))}）：在码头" in run(note2.for_turn('k')), 'a plain line: when the plugin read it'
 
 
 def test_todays_ghost_only_when_charged_and_events_say_whose_and_why():
