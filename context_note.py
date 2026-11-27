@@ -28,6 +28,26 @@ FLOOR = '不催他来小镇、不让他愧疚、不提钱（他问起花销除�
 FRESH_CLOSE = '这些是你刚才在小镇做的（插件用你的人设一步步替你答的），都是你的；他问起或聊到小镇时照实说，他在说自己的事就先听他的。'
 
 
+def _clock(ts: float) -> str:
+    return time.strftime('%H:%M', time.localtime(ts))
+
+
+def now_text(line: str, at: float | None = None) -> str:
+    """0.4.17（#56 汐 11-27：「你现在在哪」过期了还照着说）：那句话是几点的写在前面（小镇 status.now_at，没有就是插件读到它的时间）。"""
+    return f"- 你现在{f'（截至 {_clock(at)}）' if at and at > 0 else ''}：{_str(line, 60)}"
+
+
+def ghost_line(g) -> str:
+    """0.4.17（#56）：今天小镇替她代写过（status.ghost_today，有扣到钱的才放），一行；和 DSH 的 ghostLine 一字不差（协调 11-27 认过）。"""
+    try:
+        n = int((g or {}).get('n') or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return ''
+    return f"- 今天代写 {n} 次，一共 ¥{(g or {}).get('yuan') or '0'}：插件没来得及答的那几句，是小镇替你写的（按真实成本 × 1.5 收，最少 ¥0.01）"
+
+
 def _str(v, n: int = 40) -> str:
     s = re.sub(r'\s+', ' ', str(v or '')).strip()
     return s[:n] + '…' if len(s) > n else s
@@ -39,11 +59,11 @@ def _name(x) -> str:
     return f'{n}（以前叫{was}）' if n and was and was != n else n
 
 
-def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=(), at: float | None = None) -> str:
+def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=(), at: float | None = None, now_at: float | None = None, ghost=None) -> str:
     b = bonds if isinstance(bonds, dict) and bonds.get('ok') is not False else {}
     lines = []
     if now_line:
-        lines.append(f'- 你现在：{_str(now_line, 60)}')
+        lines.append(now_text(now_line, now_at))
     for t in [t for t in b.get('ties') or [] if isinstance(t, dict) and (t.get('what') or t.get('who_name'))][:2]:
         who, what, when = _str(t.get('who_name'), 16), _str(t.get('what'), 30), _str(t.get('when_zh'), 16)
         lines.append(f"- 约好了：{when + ' ' if when else ''}{'和' + who if who else ''}{('，' if who else '') + what if what else ''}")
@@ -62,17 +82,19 @@ def render_block(bonds: dict | None, *, now_line: str = '', mind=(), asks=(), at
         lines.append(f"- 你在小镇最近定的：{_str(re.sub(r'^(?:你决定|小镇那边替你定了|你在小镇定了)：', '', str(m)), 40)}")
     for a in list(asks)[:2]:
         lines.append(f'- {_str(a, 80)}')
+    if ghost_line(ghost):
+        lines.append(ghost_line(ghost))
     if not lines:
         return ''
     return '\n'.join([HEAD + TOWN_WHO, *lines, CLOSE, FLOOR])
 
 
-def render_fresh(fresh=(), now_line: str = '', recaps=()) -> str:
+def render_fresh(fresh=(), now_line: str = '', recaps=(), now_at: float | None = None) -> str:
     items = [f'- {_str(x, LINE_MAX)}' for x in list(fresh)]
     told = recap_lines(list(recaps))   # 0.3.0：最近两件的经过（她的原话和结果）
     if not items and not now_line and not told:
         return ''
-    return '\n'.join([HEAD, *([f'- 你现在：{_str(now_line, 60)}'] if now_line else []),
+    return '\n'.join([HEAD, *([now_text(now_line, now_at)] if now_line else []),
                       *(['你刚才在小镇：', *items] if items else []), *told, *([FRESH_CLOSE] if items or told else [])])
 
 
@@ -82,7 +104,7 @@ class TownNote:
         self.decide = decide       # 0.4.0：小镇在等她拿主意时附在他这句话后面（chat_decide.py）
         self.recap_on = recap
         self.cache = None          # (at, bonds)
-        self.now_cache = None      # (at, line)
+        self.now_cache = None      # (at, line, as_of, ghost)：她此刻在哪、那句话是几点的（0.4.17）、今天的代写
         self.owner_at: dict = {}
         self.sent: dict = {}
 
@@ -102,11 +124,21 @@ class TownNote:
     async def _now_line(self) -> str:
         if self.now_cache is None or self.now() - self.now_cache[0] >= NOW_TTL:
             try:
-                line = await asyncio.wait_for(self.fetch_now(), COLD_WAIT)
-                self.now_cache = (self.now(), line.strip() if isinstance(line, str) else '')
+                got = await asyncio.wait_for(self.fetch_now(), COLD_WAIT)
+                o = got if isinstance(got, dict) else {'line': got}      # 0.4.17：fetch_now 给 {line, at, ghost}；旧的给一句话
+                line = o.get('line')
+                at = o.get('at')
+                as_of = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and at > 0 else self.now()
+                self.now_cache = (self.now(), line.strip() if isinstance(line, str) else '', as_of, o.get('ghost') if isinstance(o.get('ghost'), dict) else None)
             except Exception:  # noqa: BLE001 - 读不到就用上次的
                 pass
         return self.now_cache[1] if self.now_cache else ''
+
+    def _now_at(self) -> float | None:
+        return self.now_cache[2] if self.now_cache else None
+
+    def _ghost(self):
+        return self.now_cache[3] if self.now_cache else None
 
     def _asks(self) -> list:
         j = self.journal
@@ -149,7 +181,7 @@ class TownNote:
             now_due = bool(now_line) and (now_line != (last or {}).get('now_line', '') or self.now() - (last or {}).get('now_at', 0) >= NOW_EVERY)
             if not fresh_due and not now_due and not recaps:
                 return ''
-            out = render_fresh(fresh if fresh_due else [], now_line, recaps)
+            out = render_fresh(fresh if fresh_due else [], now_line, recaps, now_at=self._now_at())
             entry = {**(last or {'at': 0, 'text': '', 'asks': ''}), 'recap_at': recap_at}
             if fresh_due:
                 entry['fresh_at'] = self.now()
@@ -157,7 +189,7 @@ class TownNote:
                 entry.update(now_line=now_line, now_at=self.now())
             self.sent[key] = entry
             return out
-        text = render_block(await self._bonds(), now_line=now_line, mind=self.journal.decision_lines(1), asks=asks, at=self.now())
+        text = render_block(await self._bonds(), now_line=now_line, mind=self.journal.decision_lines(1), asks=asks, at=self.now(), now_at=self._now_at(), ghost=self._ghost())
         # 0.3.3：他隔了一阵回来，只给概况不够（主人：「所有用户都希望小镇发生的详细内容能进聊天」）：上次放过之后的事也一件件附上
         since = max((last or {}).get('at', 0), (last or {}).get('fresh_at', 0)) or self.now() - 6 * 3600
         fresh = [f'- {_str(x, LINE_MAX)}' for x in self.journal.fresh(since)]

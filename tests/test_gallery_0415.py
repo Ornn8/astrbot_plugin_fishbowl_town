@@ -3,6 +3,7 @@
 （照方子拍照 7.2 只有 DSH 插件有：AstrBot 这边没有拍照工具。）"""
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +16,11 @@ from astrbot_plugin_fishbowl_town.gallery import (GALLERY_NO, GALLERY_YES, PIC_F
                                                   image_type, is_owner_pic_ref, owner_said, stars_of)
 from astrbot_plugin_fishbowl_town.journal import Journal  # noqa: E402
 from astrbot_plugin_fishbowl_town.town_client import TownClient, TownError  # noqa: E402
+
+
+def body(s) -> str:
+    """0.4.17：结果最后一行是回执，比对的是前面的话。"""
+    return re.sub(r'\n回执 \{[^\n]*\}$', '', str(s))
 
 Q = 'G-0123456789'
 QUOTE_R = {'ok': True, 'code': 'quoted', 'quote': Q, 'coin': 63, 'text': '照「海边」试一次：63 鲸币，主人点头后扣。'}
@@ -204,7 +210,7 @@ def test_0415_gallery_owner_picture_uploads_his_latest_and_sends_the_u_number(tm
     async def gone(data, ctype):
         raise TownError('HTTP_404', 404)
     w.client.gallery_upload = gone
-    assert w.act({'do': 'gallery', 'spot': 'S-1', 'ref': '主人的图'}) == isle_tools.GALLERY_CLOSED
+    assert body(w.act({'do': 'gallery', 'spot': 'S-1', 'ref': '主人的图'})) == isle_tools.GALLERY_CLOSED
     assert not [c for c in w.calls if c[0] == 'act']
 
     async def busy(data, ctype):

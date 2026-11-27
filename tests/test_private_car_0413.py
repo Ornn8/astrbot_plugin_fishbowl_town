@@ -3,6 +3,7 @@
 别的 build 照旧挡。自己下牌 {"do":"demolish","car":"车名"} 日记里写「给车下牌」，不写「拆楼」。"""
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -10,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
 from astrbot_plugin_fishbowl_town import isle_tools as T  # noqa: E402
+
+
+def body(s) -> str:
+    """0.4.17：结果最后一行是回执，比对的是前面的话。"""
+    return re.sub(r'\n回执 \{[^\n]*\}$', '', str(s))
 
 
 class Journal:
@@ -57,8 +63,8 @@ def test_car_type_and_plate_go_to_the_island_a_house_build_still_points_to_cobui
     assert '「好了」\n办成了' in act(c, j, car_type)
     assert '办成了' in act(c, j, {'do': 'build', 'car': '小黄', 'plate': True})
     assert c.acts == [car_type, {'do': 'build', 'car': '小黄', 'plate': True}]
-    assert act(c, j, {'do': 'build', 'lot': 'L-0107', 'idea': '海边小屋'}) == T.BUILD_HERE
-    assert act(c, j, {'do': 'confirm_build', 'car': '小黄'}) == T.BUILD_HERE
+    assert body(act(c, j, {'do': 'build', 'lot': 'L-0107', 'idea': '海边小屋'})) == T.BUILD_HERE
+    assert body(act(c, j, {'do': 'confirm_build', 'car': '小黄'})) == T.BUILD_HERE
     assert len(c.acts) == 2
     assert '在岛上在车行登记车型：好了' in j.j[0]
     assert '在岛上给车上牌' in j.j[1]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 import time
 
@@ -82,6 +83,77 @@ NOT_YET = '小镇那边还没开这个（主聊天里看岛上、在岛上做事
 BUILD_HERE = ('盖楼不在这里做，也不在小镇的回合里做：盖楼要和主人一起，用「一起盖楼」fishbowl_town_build（do="start"、lot 填地号）在这个私聊里和他商量，'
               '插件用 Blender 做出来、把预览图发给他看；他说「交吧」才交上岛，报价出来他说「盖吧」才扣鲸币。楼里的室内也一样（do="start" 再写 interior=true、floor 第几层）。')
 HONEST = '（这是岛上刚回你的原话。办成了就照这句告诉主人；没办成就照实说没办成、为什么，别说成办了。）'
+
+# 0.4.17（#56 汐、灯 11-27：说明、例子里的名字和她手上的工具对不上）：小镇的话写的是接口（isle/look、isle/act），她手上的是工具，照工具名说。
+# 和 DSH 插件 lib/isle-tools.js 的 TOOL_WORDS 同一张表
+TOOL_WORDS = (
+    ('查看用 isle/look：{"read": {"topic": …}}', '查看用 fishbowl_isle_look（topic 填要查的）'),
+    ('isle/look 的「我的」', 'fishbowl_isle_look 查「我的」'),
+    ('先开长轮询 GET /town/api/outside/turns，连上以后', '插件连上小镇以后'),
+    ('isle/look', 'fishbowl_isle_look'),
+    ('isle/act', 'fishbowl_isle_act'),
+)
+# 岛上的话里写的 {"do":…} 是回合里的写法；主聊天里就是 fishbowl_isle_act 的 world（和 DSH 的 WORLD_HINT 一字不差）
+WORLD_HINT = '（上面写的 {"do":…}，在这里就填进 fishbowl_isle_act 的 world；{"do":"look",…} 用 fishbowl_isle_look 查。）'
+WHERE_ZH = {'world': '鱼缸岛'}
+
+
+def tool_words(text) -> str:
+    """小镇原话里的接口名换成她手上的工具名；别的一字不改。"""
+    out = str(text if text is not None else '')
+    for a, b in TOOL_WORDS:
+        out = out.replace(a, b)
+    return out
+
+
+def _with_hint(t: str) -> str:
+    return f'{t}\n{WORLD_HINT}' if re.search(r'\{\s*"do"\s*:', t) else t
+
+
+def where_text(w) -> str:
+    """回执里的 where（小镇给的是对象）-> 一个地名。"""
+    if w is None or w == '':
+        return ''
+    if not isinstance(w, dict):
+        return str(w)
+    if w.get('place_id') in WHERE_ZH:
+        return WHERE_ZH[w['place_id']]
+    return str(w.get('spot_name') or w.get('name') or w.get('place_name') or w.get('venue_name') or w.get('place_id') or w.get('kind') or '')
+
+
+def receipt_tail(rc=None, **fallback) -> str:
+    """0.4.17（#56）：结果最后一行原样的回执字段（小镇 3d 回执：ok / code / where / spent_yuan / piggy_yuan，外加是哪条鱼 who）。
+    和 DSH 的 receiptTail 同一个样子（json 紧凑写、中文不转义）。"""
+    r = rc if isinstance(rc, dict) else {}
+    pick = lambda k: r.get(k) if r.get(k) is not None else fallback.get(k)  # noqa: E731
+    ok = pick('ok') is not False
+    out = {'ok': ok, 'code': str(r.get('code') or fallback.get('code') or ('OK' if ok else 'UNKNOWN_FAIL'))}
+    where = where_text(pick('where'))
+    if where:
+        out['where'] = where
+    for k in ('spent_yuan', 'piggy_yuan', 'who'):
+        v = pick(k)
+        if v is not None and v != '':
+            out[k] = f'{v:.2f}' if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
+    return '回执 ' + json.dumps(out, ensure_ascii=False, separators=(',', ':'))
+
+
+def local_fail(text: str, code: str) -> str:
+    """插件这边挡下、没到岛上的：一句白话 + 回执行。"""
+    return f'{text}\n{receipt_tail(None, ok=False, code=code)}'
+
+
+def isle_fail_code(error) -> str:
+    """小镇没接（isle_fail 那几种）的代码，和 DSH 的 isleFailCode 一样。"""
+    if isinstance(error, TownError):
+        if error.code == 'TOWN_OFF':
+            return 'TOWN_OFF'
+        if error.status in (404, 405):
+            return 'PLUGIN_NOT_YET'
+        if error.status == 503:
+            return 'TOWN_BUSY'
+        return str(error.code or f'HTTP_{error.status or 0}')
+    return str(getattr(error, 'code', '') or 'NETWORK')
 
 
 def clip(v, n: int) -> str:
@@ -158,19 +230,20 @@ def _retryable(error) -> bool:
 async def look(client, read: dict) -> str:
     """看岛上：岛上回的那一页原样给她（标上查的是什么）；带图的页只给图上画的是什么。"""
     if client is None or not hasattr(client, 'isle_look'):
-        return NOT_YET
+        return local_fail(NOT_YET, 'PLUGIN_NOT_YET')
     try:
         r = await client.isle_look(read)
     except TownError as error:
-        return isle_fail(error)
+        return local_fail(tool_words(isle_fail(error)), isle_fail_code(error))
     if not isinstance(r, dict):
-        return '岛上没回话，过一会儿再查。'
+        return local_fail('岛上没回话，过一会儿再查。', 'TOWN_NO_ANSWER')
     if r.get('ok') is False:
         old = '\n（「我的」岛上还没开，先查「我的店」，或者「地」「楼」「田」。）' if read.get('topic') == '我的' and 'topic 只能是' in str(r.get('text') or '') else ''
-        return f"没查到：{clip(r.get('text') or r.get('code') or '岛上没说为什么', TEXT_MAX)}{old}"
+        return f"没查到：{clip(tool_words(r.get('text') or r.get('reason') or r.get('code') or '岛上没说为什么'), TEXT_MAX)}{old}\n{receipt_tail(None, ok=False, code=r.get('code'))}"
     pics = pics_of(r)
     note = '\n'.join(['', '', NO_PICS_HEAD, *[f'{CIRCLED[k]} {p["alt"] or "（没写画的是什么）"}' for k, p in enumerate(pics)]]) if pics else ''
-    return f"【岛上 · {TOPIC_ZH.get(read['topic'], read['topic'])}】\n{clip(r.get('text') or '（这一页是空的）', FULL_MAX if read.get('topic') == '怎么做' else TEXT_MAX)}{note}"
+    page = _with_hint(clip(tool_words(r.get('text') or '（这一页是空的）'), FULL_MAX if read.get('topic') == '怎么做' else TEXT_MAX))
+    return f"【岛上 · {TOPIC_ZH.get(read['topic'], read['topic'])}】\n{page}{note}"
 
 
 # 0.4.15 画廊：她的 gallery_confirm 插件自己办（岛上不收她直接写的）；GALLERY_CLOSED = 小镇还没开画廊时她看到的，不是报错。
@@ -188,26 +261,26 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     owner_pic() -> (字节, 类型) | None（主人 30 分钟内在私聊里发的最后一张图）。"""
     w = world_of(world)
     if not w:
-        return '写一件要做的事：world 填 {"do":"…", …}（和小镇回合里写的 world 一样）。不会写先用 fishbowl_isle_look 查「怎么做」。'
+        return local_fail('写一件要做的事：world 填 {"do":"…", …}（和小镇回合里写的 world 一样）。不会写先用 fishbowl_isle_look 查「怎么做」。', 'BAD_ARGS')
     verb = w['do']
     if verb in COBUILD and not is_car_build(w):
-        return BUILD_HERE
+        return local_fail(BUILD_HERE, 'USE_BUILD_TOOL')
     if verb == 'look':
-        return '查看用 fishbowl_isle_look，不算做事。'
+        return local_fail('查看用 fishbowl_isle_look，不算做事。', 'USE_LOOK')
     if verb == 'gallery_confirm':
         return await confirm_try(client, w, journal=journal, gallery=gallery, consent=consent)
     w2 = w
     if verb == 'gallery' and is_owner_pic_ref(w.get('ref')):
         up = await upload_owner_pic(client, gallery, owner_pic)
         if up.get('why'):
-            return up['why']
+            return local_fail(up['why'], 'OWNER_PIC')
         w2 = {**w, 'ref': up['id']}
     words = owner_words.strip() if isinstance(owner_words, str) else ''      # 0.4.15：主人的原话不截
     what = car_what(w) or report_what(w) or VERB_ZH.get(verb) or f'do={clip(verb, 24)}'
     if verb in OWNER_MONEY and not words:
-        return f'{what}花的是主人给你的饭票：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。'
+        return local_fail(f'{what}花的是主人给你的饭票：要主人在这段聊天里叫你做、或者你问了他点了头才办，owner_words 填他的原话。他没提就先别办，也不要劝他充值。什么都没扣。', 'OWNER_WORDS')
     if client is None or not hasattr(client, 'isle_act'):
-        return NOT_YET
+        return local_fail(NOT_YET, 'PLUGIN_NOT_YET')
 
     def note(t):
         try:
@@ -226,18 +299,20 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
             if k == 0 and _retryable(error):                 # 不知道岛上收没收到：同一个 ref 再发一次
                 await sleep(min(5.0, float(error.retry_after or 0)) or RETRY_S)
                 continue
-            why = isle_fail(error)
+            why = tool_words(isle_fail(error))
             if why != NOT_YET:
                 note(f'你在聊天里想在岛上{what}，没办成：{clip(why, 60)}')
-            return why
+            body = error.data if isinstance(error.data, dict) else {}
+            return f"{why}\n{receipt_tail(body.get('receipt'), ok=False, code=isle_fail_code(error))}"
         if k == 0 and isinstance(r, dict) and r.get('ok') is False and r.get('code') == 'unavailable':
             await sleep(RETRY_S)                               # 岛没答上来：同一个 ref 再问一次
             continue
         break
     if not isinstance(r, dict):
-        return f'岛上没回话，不知道办没办成：先用 fishbowl_isle_look 查「我的」看一眼。{HONEST}'
+        return local_fail(f'岛上没回话，不知道办没办成：先用 fishbowl_isle_look 查「我的」看一眼。{HONEST}', 'TOWN_NO_ANSWER')
     ok = r.get('ok') is not False
-    said = clip(r.get('text') or ('办了' if ok else '没办成'), TEXT_MAX)
+    said = clip(tool_words(r.get('text') or r.get('reason') or ('办了' if ok else '没办成')), TEXT_MAX)
+    tail = receipt_tail(r.get('receipt'), ok=ok, code=r.get('code'))
     src = note(f"你在聊天里{'' if ok else '想'}在岛上{what}{'' if ok else '，没成'}：{clip(said, 80)}{f'（主人说：「{clip(words, 40)}」）' if words else ''}")
     # 0.4.14（D）：办成的钉进接下来的小镇回合（主人在场定的，那边别改它）；要走的到了就松开，当场办完的带进一个回合就松开
     if ok and journal is not None and hasattr(journal, 'pin'):
@@ -251,9 +326,9 @@ async def act(client, world, owner_words: str = '', journal=None, sleep=asyncio.
     if q:
         coin = f"，{q['coin']} 鲸币" if q.get('coin') else ''
         return (f"岛上回你的：「{said}」\n只报了价，还没扣：报价号 {q['quote']}{coin}。把价告诉主人；他在这里说了「画吧」，"
-                f'再写 {{"do":"gallery_confirm","quote":"{q["quote"]}"}}，那时才扣（2 小时内有效）。他不说就不用管。{HONEST}')
+                f'再写 {{"do":"gallery_confirm","quote":"{q["quote"]}"}}，那时才扣（2 小时内有效）。他不说就不用管。{HONEST}\n{tail}')
     head = '还没办完：出发了，到了照办，办好了小镇下一回合告诉你' if queued else '办成了' if ok else f"没办成（{clip(r.get('code') or '没说', 24)}）"
-    return f'岛上回你的：「{said}」\n{head}。{HONEST}'
+    return f"{_with_hint(f'岛上回你的：「{said}」')}\n{head}。{HONEST}\n{tail}"
 
 
 def _note(journal, t) -> str:

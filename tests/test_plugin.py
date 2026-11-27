@@ -2,6 +2,7 @@
 运行：python -m pytest tests（在插件目录的上一级能 import astrbot_plugin_fishbowl_town）。"""
 import asyncio
 import json
+import re
 import secrets
 import socket
 import subprocess
@@ -97,7 +98,7 @@ def test_note_full_when_he_comes_back_then_only_whats_new(tmp_path):
 
     async def scenario():
         first = await note.for_turn('me')
-        assert '- 你现在：在漪家门口' in first and '好朋友：阿鲸' in first and '用你的人设一步步替你答' in first and '不在场' not in first
+        assert re.search(r'- 你现在（截至 \d\d:\d\d）：在漪家门口', first) and '好朋友：阿鲸' in first and '用你的人设一步步替你答' in first and '不在场' not in first
         clock[0] += 120
         assert await note.for_turn('me') == ''
         where[0] = '在漪家，正和漪聊着'

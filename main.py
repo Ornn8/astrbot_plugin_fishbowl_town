@@ -39,7 +39,7 @@ try:
 except ImportError:  # 旧版本：AstrBot 也收 {'type': 'text', 'text': ...}
     TextPart = None
 
-VERSION = '0.4.16'
+VERSION = '0.4.17'
 PLUGIN = 'astrbot_plugin_fishbowl_town'
 VERDICT_ZH = {'yes': '同意', 'no': '不同意', 'not_now': '先不急'}
 OFF_DUTY = '插件现在没在小镇值班（还没填小镇接入码，或者插件配置里的开关关着）。要去小镇，请主人到 AstrBot 插件配置「鱼缸小镇」里打开。'
@@ -353,10 +353,15 @@ class FishbowlTown(Star):
             raise TownError('OFF')
         return await self.client.bonds()
 
-    async def _now_line(self) -> str:
+    async def _now_line(self):
         if not self.client:
             return ''
-        return now_with_isle(await self.client.status())     # 0.4.3：她在岛上时说「在鱼缸岛上」，不是老镇那句「在家歇着」
+        st = await self.client.status()
+        # 0.4.3：她在岛上时说「在鱼缸岛上」，不是老镇那句「在家歇着」；0.4.17（#56）：带上那句话是几点的（now_at）、今天的代写（ghost_today）
+        at = (st or {}).get('now_at')
+        ghost = (st or {}).get('ghost_today')
+        return {'line': now_with_isle(st), 'at': float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and at > 0 else None,
+                'ghost': ghost if isinstance(ghost, dict) else None}
 
     # --- 0.3.0 两边是同一个她：主人私聊最近的几句带进小镇（过滤过，回声检查），小镇的经过带回私聊 -----------------------------------
     def _recap_on(self) -> bool:
@@ -640,6 +645,9 @@ class FishbowlTown(Star):
             out.append(f"{name} 在小镇：{now_with_isle(st) or (st or {}).get('outside_state') or (st or {}).get('state') or '在小镇'}")
             if isle_status_line(st):
                 out.append(isle_status_line(st))
+            g = (st or {}).get('ghost_today')
+            if isinstance(g, dict) and isinstance(g.get('line'), str) and g['line'].strip():
+                out.append(g['line'].strip())                   # 0.4.17（#56）：今天代写的合计，小镇的原话
         except TownError as error:
             out.append(f'这会儿连不上小镇（{error.code}），她会自己连回去。')
         r = self.runner.stats if self.runner else {}

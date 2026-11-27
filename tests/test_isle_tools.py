@@ -17,6 +17,11 @@ from test_town_base import Net, Res  # noqa: E402
 MAIN = (ROOT / 'main.py').read_text(encoding='utf-8')
 
 
+def body(s) -> str:
+    """0.4.17：结果最后一行是回执，比对的是前面的话。"""
+    return re.sub(r'\n回执 \{[^\n]*\}$', '', str(s))
+
+
 def run(c):
     return asyncio.run(c)
 
@@ -106,7 +111,7 @@ def test_look_mine_by_default_verbatim_and_failures_in_the_islands_words():
     assert run(T.look(c, T.read_of())) == f'【岛上 · 你自己的】\n{mine}'
     assert c.reads == [{'topic': '我的'}]
     c = Client(look={'ok': False, 'code': 'rate_limited', 'retry_after': 600, 'text': '主聊天里查岛上每小时最多 30 次，10 分钟后再查'})
-    assert run(T.look(c, T.read_of('地'))) == '没查到：主聊天里查岛上每小时最多 30 次，10 分钟后再查'
+    assert body(run(T.look(c, T.read_of('地')))) == '没查到：主聊天里查岛上每小时最多 30 次，10 分钟后再查'
     c = Client(look={'ok': False, 'code': 'bad', 'text': 'topic 只能是 地、楼、铺位、店、订单、缺的、统计、镇规、怎么做、我的店、价、地图、样子、田'})
     out = run(T.look(c, T.read_of()))
     assert out.startswith('没查到：topic 只能是') and '「我的」岛上还没开，先查「我的店」' in out
@@ -121,14 +126,14 @@ def test_an_old_town_without_the_routes_answers_plainly():
     gone = TownError('HTTP_404', 404, '')
     c = Client(look=gone, act=gone)
     j = Journal()
-    assert run(T.look(c, T.read_of())) == T.NOT_YET
-    assert run(T.act(c, '{"do":"bid","auction":"A-1","max":5}', journal=j, sleep=no_sleep)) == T.NOT_YET
+    assert body(run(T.look(c, T.read_of()))) == T.NOT_YET
+    assert body(run(T.act(c, '{"do":"bid","auction":"A-1","max":5}', journal=j, sleep=no_sleep))) == T.NOT_YET
     assert 'fishbowl_town_go' in T.NOT_YET and j.j == []
     assert T.isle_fail(TownError('HTTP_405', 405)) == T.NOT_YET
     assert '没对外来的鱼开放' in T.isle_fail(TownError('TOWN_OFF', 404))
     assert re.search(r'太忙.*约 3 秒', T.isle_fail(TownError('TOWN_UNAVAILABLE', 503, '', 3)))
-    assert run(T.look(object(), T.read_of())) == T.NOT_YET                  # an older client object
-    assert run(T.act(None, '{"do":"walk","to":"广场"}')) == T.NOT_YET
+    assert body(run(T.look(object(), T.read_of()))) == T.NOT_YET                  # an older client object
+    assert body(run(T.act(None, '{"do":"walk","to":"广场"}'))) == T.NOT_YET
 
 
 def test_act_verbatim_framed_honestly_one_ref_per_action_and_a_journal_line():
@@ -138,7 +143,7 @@ def test_act_verbatim_framed_honestly_one_ref_per_action_and_a_journal_line():
     c = Client(act=lambda w: replies.pop(0))
     j = Journal()
     out = run(T.act(c, '{"do":"bid","auction":"A-0007","max":600}', journal=j, sleep=no_sleep))
-    assert out == '岛上回你的：「出价收下了：你最多出 600 鲸币，现价 325 鲸币，你领先」\n办成了。（这是岛上刚回你的原话。办成了就照这句告诉主人；没办成就照实说没办成、为什么，别说成办了。）'
+    assert body(out) == '岛上回你的：「出价收下了：你最多出 600 鲸币，现价 325 鲸币，你领先」\n办成了。（这是岛上刚回你的原话。办成了就照这句告诉主人；没办成就照实说没办成、为什么，别说成办了。）'
     assert c.acts[0][0] == {'do': 'bid', 'auction': 'A-0007', 'max': 600} and re.fullmatch(r'astr-[0-9a-f]+-[0-9a-f]{6}', c.acts[0][1])
     assert j.j[0] == ('self', '你在聊天里在岛上出价：出价收下了：你最多出 600 鲸币，现价 325 鲸币，你领先')
     no = run(T.act(c, '{"do":"claim","near":"广场","w":12,"d":12,"max":750}', journal=j, sleep=no_sleep))
@@ -175,7 +180,7 @@ def test_her_owners_money_only_with_his_words_and_building_is_not_here():
     assert '办成了' in run(T.act(c, '{"do":"sprite_tall","tall":1.5}', sleep=no_sleep))
     assert len(c.acts) == 2
     for verb in ('build', 'build_guide', 'confirm_build'):
-        assert run(T.act(c, json.dumps({'do': verb, 'lot': 'L-1'}))) == T.BUILD_HERE
+        assert body(run(T.act(c, json.dumps({'do': verb, 'lot': 'L-1'})))) == T.BUILD_HERE
     assert 'fishbowl_town_build' in T.BUILD_HERE and '交吧' in T.BUILD_HERE and '盖吧' in T.BUILD_HERE
     assert 'fishbowl_isle_look' in run(T.act(c, '{"do":"look","topic":"地"}'))
     assert 'world 填' in run(T.act(c, '{}'))

@@ -105,8 +105,12 @@ def describe(item: dict) -> str | None:
         line = f"· {label}：{_short(facts, 200) if facts else f'你和{other}想在一起，要两边的主人都同意（3 天内）。'}"
         if d.get('ask') is not False:
             line += f'\n（问问主人同不同意你和{other}在一起；他回答了，用「小镇主人拍板」把他的意思交给小镇。）'
-    if kind == 'outside_receipt':
-        line = f"· {label}：{'没成' if d.get('ok') is False else '成了'}{'｜' + _short(facts, 200) if facts else ''}"
+    if kind == 'outside_receipt':     # 0.4.17（#56）：写是哪条鱼（一个账号几条鱼共用余额）、没成的带代码
+        who = f"（{_short(d['who'], 20)}）" if d.get('who') else ''
+        code = f"（{d['code']}）" if d.get('ok') is False and d.get('code') else ''
+        line = f"· {label}{who}：{'没成' if d.get('ok') is False else '成了'}{'｜' + _short(facts, 200) if facts else ''}{code}"
+    if kind == 'outside_ghost' and d.get('fee_line'):
+        line = f"· {_short(d['fee_line'], 200)}"     # 0.4.17（#56）：小镇写好的那一句（多少钱、为什么）原样
     if kind == 'phone':
         who = (d.get('from') or {}).get('name') if isinstance(d.get('from'), dict) else ''
         line = f"· {label}：{who + '给你发了消息：' if who else ''}{_short(d.get('text') or facts, 80)}{'（还约了见面）' if d.get('meet') else ''}"
